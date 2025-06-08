@@ -188,34 +188,34 @@ const analyzeTrendData = (data_list, trend_type_display, numResultsEntryValue) =
     let results = [];
     const sorted_months = Array.from(monthly_data.keys()).sort();
 
-    const TREND_ANALYSIS_TYPES = {
+    const TREND_ANALYSIS_TYPES_LOCAL = { // Renamed to avoid conflict with global constant
         monthly_total_duration: "每月總收聽時間",
         monthly_top_songs: "每月熱門歌曲",
         monthly_top_artists: "每月熱門歌手",
     };
 
-    if (trend_type_display === TREND_ANALYSIS_TYPES["monthly_total_duration"]) {
+    if (trend_type_display === TREND_ANALYSIS_TYPES_LOCAL["monthly_total_duration"]) {
         for (const month of sorted_months) {
             const total_ms = monthly_data.get(month).reduce((sum, r) => sum + getMsFromRecord(r.ms_played || 0), 0);
             results.push([month, formatMsToMinSec(total_ms), total_ms]); // (月份, 格式化時長, 原始毫秒)
         }
-    } else if (trend_type_display === TREND_ANALYSIS_TYPES["monthly_top_songs"]) {
+    } else if (trend_type_display === TREND_ANALYSIS_TYPES_LOCAL["monthly_top_songs"]) {
         const num_top_items = parseInt(numResultsEntryValue, 10) || 5; // Default to 5
         for (const month of sorted_months) {
             const monthly_ranked_songs = rankData(monthly_data.get(month), "master_metadata_track_name", String(num_top_items), "count");
             const top_songs_display = [];
-            for (const [item_data, primary_metric, total_ms, count, avg_ms] of monthly_ranked_songs) {
+            for (const [item_data, /*primary_metric*/, /*total_ms*/, count, /*avg_ms*/] of monthly_ranked_songs) {
                 const [song_name, artist_name] = item_data.split(' - ');
                 top_songs_display.push(`${song_name} (${artist_name}) - ${count}次`);
             }
             results.push([month, top_songs_display.join("; ")]);
         }
-    } else if (trend_type_display === TREND_ANALYSIS_TYPES["monthly_top_artists"]) {
+    } else if (trend_type_display === TREND_ANALYSIS_TYPES_LOCAL["monthly_top_artists"]) {
         const num_top_items = parseInt(numResultsEntryValue, 10) || 5; // Default to 5
         for (const month of sorted_months) {
             const monthly_ranked_artists = rankData(monthly_data.get(month), "master_metadata_album_artist_name", String(num_top_items), "count");
             const top_artists_display = [];
-            for (const [item_data, primary_metric, total_ms, count, avg_ms] of monthly_ranked_artists) {
+            for (const [item_data, /*primary_metric*/, /*total_ms*/, count, /*avg_ms*/] of monthly_ranked_artists) {
                 const artist_name = item_data;
                 top_artists_display.push(`${artist_name} - ${count}次`);
             }
@@ -289,6 +289,12 @@ const App = () => {
     const [artistAlbumsData, setArtistAlbumsData] = useState([]);
     const [artistSongsData, setArtistSongsData] = useState([]);
     const allArtistRecordsFiltered = useRef([]); // To store all filtered records for the artist modal
+
+    // State for Gemini API response modal
+    const [isGeminiModalOpen, setIsGeminiModalOpen] = useState(false);
+    const [geminiModalTitle, setGeminiModalTitle] = useState("");
+    const [geminiModalContent, setGeminiModalContent] = useState("");
+    const [isGeminiLoading, setIsGeminiLoading] = useState(false);
 
     const getFieldKeyFromName = useCallback((displayName) => {
         for (const k in FIELD_MAPPING) {
@@ -577,126 +583,43 @@ const App = () => {
     }, []);
 
 
-    const showListeningDetails = useCallback((itemIndex) => {
-        if (!allStreamingDataOriginal.length) {
-            return;
-        }
+    const callGeminiAPI = useCallback(async (prompt, title) => {
+        setIsGeminiLoading(true);
+        setGeminiModalTitle(title);
+        setGeminiModalContent("正在生成內容，請稍候...");
+        setIsGeminiModalOpen(true);
 
-        if (trendAnalysisType !== "無") {
-            setStatus("趨勢分析結果不支援查看播放明細。");
-            return;
-        }
+        try {
+            let chatHistory = [];
+            chatHistory.push({ role: "user", parts: [{ text: prompt }] });
+            const payload = { contents: chatHistory };
+            const apiKey = "";
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const result = await response.json();
 
-        if (itemIndex < 0 || itemIndex >= currentlyDisplayedRankedItems.length) {
-            return;
-        }
-
-        const clickedItemTuple = currentlyDisplayedRankedItems[itemIndex];
-        const clickedItemData = clickedItemTuple[0]; // (item_data, primary_metric, total_ms, count, avg_ms)
-
-        // Handle artist hierarchy
-        if (currentFieldToRankKey === "master_metadata_album_artist_name") {
-            const artistNameClicked = String(clickedItemData);
-            showArtistHierarchyWindow(artistNameClicked);
-            return;
-        }
-
-        const tempRecordsForDetails = [];
-        for (const record of allStreamingDataOriginal) {
-            let isMatch = false;
-            if (currentFieldToRankKey === "spotify_track_uri") {
-                if (record.spotify_track_uri === String(clickedItemData)) {
-                    isMatch = true;
-                }
-            } else if (currentFieldToRankKey === "master_metadata_album_album_name") {
-                const [albumToFind, artistToFind] = clickedItemData.split(' - ');
-                if (record.master_metadata_album_album_name === albumToFind &&
-                    record.master_metadata_album_artist_name === artistToFind) {
-                    isMatch = true;
-                }
-            } else if (currentFieldToRankKey === "master_metadata_track_name" ||
-                currentFieldToRankKey === "ms_played") { // if ranking by total duration, still show song details
-                if (typeof clickedItemData === 'string' && clickedItemData.includes(' - ')) {
-                    const [trackToFind, artistToFind] = clickedItemData.split(' - ');
-                    if (record.master_metadata_track_name === trackToFind &&
-                        record.master_metadata_album_artist_name === artistToFind) {
-                        isMatch = true;
-                    }
-                } else { // Handle URI case for ms_played ranking
-                    if (record.spotify_track_uri === clickedItemData) {
-                        isMatch = true;
-                    }
-                }
-            }
-
-            if (isMatch) {
-                const recordDateStr = record.ts;
-                if (recordDateStr) {
-                    try {
-                        const recordDate = new Date(recordDateStr.substring(0, 10)); //YYYY-MM-DD
-                        const startObj = dateFilterEnabled ? parseDateFromString(startDate) : null;
-                        const endObj = dateFilterEnabled ? parseDateFromString(endDate) : null;
-
-                        const start_date_normalized = startObj ? new Date(startObj.getFullYear(), startObj.getMonth(), startObj.getDate()) : null;
-                        const end_date_normalized = endObj ? new Date(endObj.getFullYear(), endObj.getMonth(), endObj.getDate()) : null;
-                        const item_date_normalized = new Date(recordDate.getFullYear(), recordDate.getMonth(), recordDate.getDate());
-
-                        if ((!start_date_normalized || item_date_normalized >= start_date_normalized) &&
-                            (!end_date_normalized || item_date_normalized <= end_date_normalized)) {
-                            tempRecordsForDetails.push(record);
-                        }
-                    } catch (e) {
-                        console.warn(`跳過詳細記錄中無效日期格式的記錄: ${recordDateStr}`, e);
-                    }
-                }
-            }
-        }
-
-        if (tempRecordsForDetails.length === 0) {
-            alert(`在目前的篩選條件下，沒有找到 '${String(clickedItemData)}' 的詳細收聽記錄。`);
-            return;
-        }
-
-        const maxPlayTimesForDetails = {};
-        for (const rec of tempRecordsForDetails) {
-            const uri = rec.spotify_track_uri;
-            const ms = getMsFromRecord(rec.ms_played);
-            if (uri) {
-                maxPlayTimesForDetails[uri] = Math.max(maxPlayTimesForDetails[uri] || 0, ms);
-            }
-        }
-
-        let detailsTitle = "詳細收聽記錄";
-        if (currentFieldToRankKey === "spotify_track_uri") {
-            detailsTitle = `單曲詳細記錄: ${String(clickedItemData)}`;
-        } else if (currentFieldToRankKey === "master_metadata_album_album_name") {
-            if (typeof clickedItemData === 'string' && clickedItemData.includes(' - ')) {
-                const [albumName, artistName] = clickedItemData.split(' - ');
-                detailsTitle = `專輯 '${albumName}' (${artistName}) 詳細記錄`;
-            }
-        } else if (currentFieldToRankKey === "master_metadata_track_name") {
-            if (typeof clickedItemData === 'string' && clickedItemData.includes(' - ')) {
-                const [songName, artistName] = clickedItemData.split(' - ');
-                detailsTitle = `歌曲 '${songName}' (${artistName}) 詳細記錄`;
+            if (result.candidates && result.candidates.length > 0 &&
+                result.candidates[0].content && result.candidates[0].content.parts &&
+                result.candidates[0].content.parts.length > 0) {
+                const text = result.candidates[0].content.parts[0].text;
+                setGeminiModalContent(text);
             } else {
-                detailsTitle = `單曲詳細記錄: ${String(clickedItemData)}`;
+                setGeminiModalContent("無法生成內容。可能是 API 響應格式不正確或內容缺失。");
+                console.error("Gemini API 響應格式錯誤:", result);
             }
-        } else if (currentFieldToRankKey === "ms_played") {
-            if (typeof clickedItemData === 'string' && clickedItemData.includes(' - ')) {
-                const [songName, artistName] = clickedItemData.split(' - ');
-                detailsTitle = `歌曲 '${songName}' (${artistName}) 詳細記錄`;
-            } else {
-                detailsTitle = `單曲詳細記錄: ${String(clickedItemData)}`;
-            }
+        } catch (error) {
+            setGeminiModalContent(`生成內容時發生錯誤: ${error.message}`);
+            console.error("調用 Gemini API 時發生錯誤:", error);
+        } finally {
+            setIsGeminiLoading(false);
         }
+    }, []);
 
-        setDetailRecords(tempRecordsForDetails);
-        setDetailModalTitle(detailsTitle);
-        setDetailMaxPlayTimes(maxPlayTimesForDetails);
-        setDetailSearchTerm(""); // Clear search when opening new modal
-        setIsDetailModalOpen(true);
-    }, [allStreamingDataOriginal, currentlyDisplayedRankedItems, currentFieldToRankKey, dateFilterEnabled, startDate, endDate, trendAnalysisType]);
-
+    // Moved up for initialization order
     const showArtistHierarchyWindow = useCallback((artistNameClicked) => {
         setArtistName(artistNameClicked);
         allArtistRecordsFiltered.current = []; // Clear previous filtered records
@@ -784,6 +707,247 @@ const App = () => {
     }, [allStreamingDataOriginal, dateFilterEnabled, startDate, endDate]);
 
 
+    const triggerGeminiAnalysis = useCallback(() => {
+        if (!currentlyDisplayedRankedItems.length) {
+            alert("沒有可供分析的排行結果。請先載入數據並執行分析。");
+            return;
+        }
+
+        let dataSummary = "以下是我的 Spotify 播放記錄分析結果：\n\n";
+        dataSummary += `當前排行項目: ${rankingField}\n`;
+        dataSummary += `排行標準: ${rankMetric}\n\n`;
+
+        dataSummary += "排行前 20 項數據 (項目, 主要指標值, 總播放時長, 播放次數, 平均播放時長):\n";
+        currentlyDisplayedRankedItems.slice(0, 20).forEach((item, index) => {
+            const [item_data, primary_metric_val, total_ms_val, count_val, avg_ms_val] = item;
+            dataSummary += `${index + 1}. ${item_data} | ${primary_metric_val} | ${formatMsToMinSec(total_ms_val)} | ${count_val}次 | ${formatMsToMinSec(avg_ms_val)}\n`;
+        });
+
+        const prompt = `根據以下的 Spotify 播放記錄分析結果，請提供關於我的收聽習慣和可能的曲風偏好的綜合分析。請用中文回應，並保持在 200 字以內，著重於提供洞察而非僅重複數據。\n\n${dataSummary}`;
+        callGeminiAPI(prompt, "分析結果洞察");
+    }, [currentlyDisplayedRankedItems, rankingField, rankMetric, callGeminiAPI]);
+
+
+    const triggerGeminiPlaylist = useCallback(() => {
+        if (rankingField !== FIELD_MAPPING[1][1] || !currentlyDisplayedRankedItems.length) {
+            alert("此功能僅在『排行項目』為『歌曲名稱 - 歌手』時可用，且需有分析結果。");
+            return;
+        }
+
+        let playlistPrompt = "根據以下用戶的 Spotify 聽歌數據，請為我推薦 30 首新的歌曲。請提供歌曲標題和藝術家。\n";
+        playlistPrompt += "請使用以下格式輸出：\nGemini 智慧推薦歌曲系統\n1. 歌曲標題 - 藝術家\n2. 歌曲標題 - 藝術家\n...\n\n";
+        playlistPrompt += "我的收聽數據摘要：\n";
+
+        // 提取前10首歌曲的詳細信息
+        const top10Songs = currentlyDisplayedRankedItems.slice(0, 10).map(item => {
+            const [songArtist, primaryMetric, totalMs, count, avgMs] = item;
+            return `- ${songArtist || '未知歌曲'} (播放次數: ${count || 0}, 總時長: ${formatMsToMinSec(totalMs || 0)})`;
+        }).join('\n');
+        if (top10Songs) {
+            playlistPrompt += `\n熱門歌曲 (前10名):\n${top10Songs}\n`;
+        } else {
+            playlistPrompt += "\n沒有熱門歌曲數據可供分析。\n";
+        }
+
+        // 提取播放時長最長的5位歌手
+        const artistDurationMap = new Map();
+        allStreamingDataOriginal.forEach(record => {
+            const artist = record.master_metadata_album_artist_name || '未知歌手';
+            const msPlayed = getMsFromRecord(record.ms_played || 0);
+            artistDurationMap.set(artist, (artistDurationMap.get(artist) || 0) + msPlayed);
+        });
+
+        const top5ArtistsByDuration = Array.from(artistDurationMap.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5)
+            .map(([artist, totalMs]) => `- ${artist || '未知歌手'} (總時長: ${formatMsToMinSec(totalMs || 0)})`)
+            .join('\n');
+
+        if (top5ArtistsByDuration) {
+            playlistPrompt += `\n播放時長最長的歌手 (前5名):\n${top5ArtistsByDuration}\n`;
+        } else {
+            playlistPrompt += "\n沒有足夠的歌手數據可供分析。\n";
+        }
+
+        // 考慮最近播放的幾首歌曲（如果數據允許）
+        const recentPlays = allStreamingDataOriginal.slice(-5).reverse().map(record => {
+            const track = record.master_metadata_track_name || '未知歌曲';
+            const artist = record.master_metadata_album_artist_name || '未知歌手';
+            return `- ${track} - ${artist}`;
+        }).join('\n');
+
+        if (recentPlays) {
+            playlistPrompt += `\n最近播放的歌曲 (前5首):\n${recentPlays}\n`;
+        }
+
+        playlistPrompt += "\n請推薦與上述音樂風格相似或基於這些資訊衍生的新歌。請確保推薦的歌曲不在上述『熱門歌曲』列表中。";
+
+        callGeminiAPI(playlistPrompt, "Gemini 推薦歌單");
+    }, [rankingField, currentlyDisplayedRankedItems, allStreamingDataOriginal, callGeminiAPI]);
+
+
+    const showListeningDetails = useCallback((itemIndex) => {
+        if (!allStreamingDataOriginal.length) {
+            return;
+        }
+
+        if (trendAnalysisType !== "無") {
+            setStatus("趨勢分析結果不支援查看播放明細。");
+            return;
+        }
+
+        if (itemIndex < 0 || itemIndex >= currentlyDisplayedRankedItems.length) {
+            return;
+        }
+
+        const clickedItemTuple = currentlyDisplayedRankedItems[itemIndex];
+        const clickedItemData = clickedItemTuple[0]; // (item_data, primary_metric, total_ms, count, avg_ms)
+
+        // Handle artist hierarchy
+        if (currentFieldToRankKey === "master_metadata_album_artist_name") {
+            const artistNameClicked = String(clickedItemData);
+            showArtistHierarchyWindow(artistNameClicked); // Call the now defined function
+            return;
+        }
+
+        const tempRecordsForDetails = [];
+        for (const record of allStreamingDataOriginal) {
+            let isMatch = false;
+            if (currentFieldToRankKey === "spotify_track_uri") {
+                if (record.spotify_track_uri === String(clickedItemData)) {
+                    isMatch = true;
+                }
+            } else if (currentFieldToRankKey === "master_metadata_album_album_name") {
+                if (typeof clickedItemData === 'string' && clickedItemData.includes(' - ')) {
+                    const [albumToFind, artistToFind] = clickedItemData.split(' - ');
+                    if (record.master_metadata_album_album_name === albumToFind &&
+                        record.master_metadata_album_artist_name === artistToFind) {
+                        isMatch = true;
+                    }
+                } else {
+                    if (record.master_metadata_album_album_name === clickedItemData) { // Fallback for simple album name
+                        isMatch = true;
+                    }
+                }
+            } else if (currentFieldToRankKey === "master_metadata_track_name" ||
+                currentFieldToRankKey === "ms_played") { // if ranking by total duration, still show song details
+                if (typeof clickedItemData === 'string' && clickedItemData.includes(' - ')) {
+                    const [trackToFind, artistToFind] = clickedItemData.split(' - ');
+                    if (record.master_metadata_track_name === trackToFind &&
+                        record.master_metadata_album_artist_name === artistToFind) {
+                        isMatch = true;
+                    }
+                } else { // Handle URI case for ms_played ranking if clickedItemData is a URI
+                    if (record.spotify_track_uri === clickedItemData) {
+                        isMatch = true;
+                    }
+                }
+            } else if (currentFieldToRankKey === "platform") {
+                if (record.platform === String(clickedItemData)) {
+                    isMatch = true;
+                }
+            } else if (currentFieldToRankKey === "conn_country") {
+                if (record.conn_country === String(clickedItemData)) {
+                    isMatch = true;
+                }
+            } else if (currentFieldToRankKey === "reason_start") {
+                if (record.reason_start === String(clickedItemData)) {
+                    isMatch = true;
+                }
+            } else if (currentFieldToRankKey === "reason_end") {
+                if (record.reason_end === String(clickedItemData)) {
+                    isMatch = true;
+                }
+            } else if (["shuffle", "skipped", "offline", "incognito_mode"].includes(currentFieldToRankKey)) {
+                // For boolean fields, clickedItemData will be "是" or "否"
+                const bool_val = (String(clickedItemData) === "是");
+                if (record[currentFieldToRankKey] === bool_val) {
+                    isMatch = true;
+                }
+            }
+
+            if (isMatch) {
+                const recordDateStr = record.ts;
+                if (recordDateStr) {
+                    try {
+                        const recordDate = new Date(recordDateStr.substring(0, 10)); //YYYY-MM-DD
+                        const startObj = dateFilterEnabled ? parseDateFromString(startDate) : null;
+                        const endObj = dateFilterEnabled ? parseDateFromString(endDate) : null;
+
+                        const start_date_normalized = startObj ? new Date(startObj.getFullYear(), startObj.getMonth(), startObj.getDate()) : null;
+                        const end_date_normalized = endObj ? new Date(endObj.getFullYear(), endObj.getMonth(), endObj.getDate()) : null; // Fixed typo end_obj
+                        const item_date_normalized = new Date(recordDate.getFullYear(), recordDate.getMonth(), recordDate.getDate());
+
+                        if ((!start_date_normalized || item_date_normalized >= start_date_normalized) &&
+                            (!end_date_normalized || item_date_normalized <= end_date_normalized)) {
+                            tempRecordsForDetails.push(record);
+                        }
+                    } catch (e) {
+                        console.warn(`跳過詳細記錄中無效日期格式的記錄: ${recordDateStr}`, e);
+                    }
+                }
+            }
+        }
+
+        if (tempRecordsForDetails.length === 0) {
+            alert(`在目前的篩選條件下，沒有找到 '${String(clickedItemData)}' 的詳細收聽記錄。`);
+            return;
+        }
+
+        const maxPlayTimesForDetails = {};
+        for (const rec of tempRecordsForDetails) {
+            const uri = rec.spotify_track_uri;
+            const ms = getMsFromRecord(rec.ms_played);
+            if (uri) {
+                maxPlayTimesForDetails[uri] = Math.max(maxPlayTimesForDetails[uri] || 0, ms);
+            }
+        }
+
+        let detailsTitle = "詳細收聽記錄";
+        if (currentFieldToRankKey === "spotify_track_uri") {
+            detailsTitle = `單曲詳細記錄: ${String(clickedItemData)}`;
+        } else if (currentFieldToRankKey === "master_metadata_album_album_name") {
+            if (typeof clickedItemData === 'string' && clickedItemData.includes(' - ')) {
+                const [albumName, artistName] = clickedItemData.split(' - ');
+                detailsTitle = `專輯 '${albumName}' (${artistName}) 詳細記錄`;
+            } else {
+                detailsTitle = `專輯 '${String(clickedItemData)}' 詳細記錄`;
+            }
+        } else if (currentFieldToRankKey === "master_metadata_track_name") {
+            if (typeof clickedItemData === 'string' && clickedItemData.includes(' - ')) {
+                const [songName, artistName] = clickedItemData.split(' - ');
+                detailsTitle = `歌曲 '${songName}' (${artistName}) 詳細記錄`;
+            } else {
+                detailsTitle = `單曲詳細記錄: ${String(clickedItemData)}`;
+            }
+        } else if (currentFieldToRankKey === "ms_played") {
+            if (typeof clickedItemData === 'string' && clickedItemData.includes(' - ')) {
+                const [songName, artistName] = clickedItemData.split(' - ');
+                detailsTitle = `歌曲 '${songName}' (${artistName}) 詳細記錄`;
+            } else {
+                detailsTitle = `單曲詳細記錄: ${String(clickedItemData)}`;
+            }
+        } else if (currentFieldToRankKey === "platform") {
+             detailsTitle = `平台 '${String(clickedItemData)}' 詳細記錄`;
+        } else if (currentFieldToRankKey === "conn_country") {
+             detailsTitle = `國家 '${String(clickedItemData)}' 詳細記錄`;
+        } else if (currentFieldToRankKey === "reason_start") {
+             detailsTitle = `開始原因 '${String(clickedItemData)}' 詳細記錄`;
+        } else if (currentFieldToRankKey === "reason_end") {
+             detailsTitle = `結束原因 '${String(clickedItemData)}' 詳細記錄`;
+        } else if (["shuffle", "skipped", "offline", "incognito_mode"].includes(currentFieldToRankKey)) {
+             detailsTitle = `${FIELD_MAPPING[Object.keys(FIELD_MAPPING).find(key => FIELD_MAPPING[key][0] === currentFieldToRankKey)][1]} '${String(clickedItemData)}' 詳細記錄`;
+        }
+
+
+        setDetailRecords(tempRecordsForDetails);
+        setDetailModalTitle(detailsTitle);
+        setDetailMaxPlayTimes(maxPlayTimesForDetails);
+        setDetailSearchTerm(""); // Clear search when opening new modal
+        setIsDetailModalOpen(true);
+    }, [allStreamingDataOriginal, currentlyDisplayedRankedItems, currentFieldToRankKey, dateFilterEnabled, startDate, endDate, trendAnalysisType, showArtistHierarchyWindow]);
+
+
     const handleArtistAlbumSelect = useCallback((albumName) => {
         const selectedAlbum = artistAlbumsData.find(album => album.albumName === albumName);
         if (selectedAlbum && selectedAlbum.rawSongsData) {
@@ -797,7 +961,7 @@ const App = () => {
         }
     }, [artistAlbumsData]);
 
-    const handleArtistSongDoubleClick = useCallback((songNameClicked, albumNameContext) => {
+    const handleArtistSongDoubleClick = useCallback((songNameClicked, /* albumNameContext */) => {
         const songSpecificRecords = allArtistRecordsFiltered.current.filter(record =>
             record.master_metadata_track_name === songNameClicked &&
             record.master_metadata_album_artist_name === artistName // Use the current artistName from state
@@ -826,7 +990,7 @@ const App = () => {
     }, [artistName]); // artistName is from the parent modal state
 
 
-    const exportToCsv = useCallback(() => { // Removed parameters here
+    const exportToCsv = useCallback(() => {
         if (!currentlyDisplayedRankedItems.length) {
             alert("沒有可匯出的數據。");
             return;
@@ -939,7 +1103,7 @@ const App = () => {
         URL.revokeObjectURL(url);
         setStatus("CSV 已成功匯出。");
         alert("排行結果已成功匯出。");
-    }, [currentlyDisplayedRankedItems, dateFilterEnabled, startDate, endDate, trendAnalysisType, rankingField, rankMetric, currentFieldToRankKey]); // Dependencies are state variables it CLOSES OVER
+    }, [currentlyDisplayedRankedItems, dateFilterEnabled, startDate, endDate, trendAnalysisType, rankingField, rankMetric, currentFieldToRankKey]);
 
 
     const exportDetailRecordsToCsv = useCallback((recordsToDisplay, title, currentMaxPlayTimes) => {
@@ -1015,7 +1179,7 @@ const App = () => {
 
 
     // Detail Modal Component
-    const DetailModal = ({ isOpen, onClose, records, title, maxPlayTimes, searchTerm, onSearchChange, onSearch, onClearSearch, onExport, searchLyricsOnline, searchAlbumReviewOnline, searchArtistBioOnline }) => {
+    const DetailModal = ({ isOpen, onClose, records, title, maxPlayTimes, searchTerm, onSearchChange, onSearch, onClearSearch, onExport, searchLyricsOnline, searchAlbumReviewOnline, searchArtistBioOnline, onSongInsight }) => {
         // Ensure useMemo is always called when DetailModal is rendered
         const filteredRecords = useMemo(() => {
             // Only perform filtering if the modal is logically open and a search term exists
@@ -1119,6 +1283,14 @@ const App = () => {
                                     Google 搜尋藝術家簡介
                                 </button>
                             )}
+                            {item_name_for_web_search && artist_name_for_web_search && (
+                                <button
+                                    onClick={() => onSongInsight(item_name_for_web_search, artist_name_for_web_search)}
+                                    className="px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white text-md rounded-lg shadow-md hover:from-blue-600 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
+                                >
+                                    ✨ 歌曲洞察
+                                </button>
+                            )}
                         </div>
 
                         <div className="flex-grow overflow-auto border border-gray-600 rounded-xl shadow-inner">
@@ -1179,7 +1351,7 @@ const App = () => {
     };
 
     // Artist Modal Component
-    const ArtistModal = ({ isOpen, onClose, artistName, albumsData, songsData, onAlbumSelect, onSongDoubleClick, onArtistBioSearch }) => {
+    const ArtistModal = ({ isOpen, onClose, artistName, albumsData, songsData, onAlbumSelect, onSongDoubleClick, onArtistBioSearch, onArtistInsight }) => {
         if (!isOpen) return null;
 
         return (
@@ -1187,12 +1359,18 @@ const App = () => {
                 <div className="bg-gradient-to-br from-green-800 to-emerald-900 text-white rounded-3xl shadow-2xl p-8 w-full max-w-6xl max-h-[95vh] flex flex-col transform scale-95 opacity-0 animate-fade-in-up">
                     <h2 className="text-3xl font-bold mb-6 text-center drop-shadow-md">歌手詳細資料: {artistName}</h2>
 
-                    <div className="flex justify-center mb-6">
+                    <div className="flex justify-center mb-6 gap-3">
                         <button
                             onClick={() => onArtistBioSearch(artistName)}
                             className="px-6 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-xl shadow-lg hover:from-purple-600 hover:to-indigo-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
                         >
                             Google 搜尋藝術家簡介
+                        </button>
+                        <button
+                            onClick={() => onArtistInsight(artistName)}
+                            className="px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-xl shadow-lg hover:from-blue-600 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
+                        >
+                            ✨ 歌手洞察
                         </button>
                     </div>
 
@@ -1250,6 +1428,36 @@ const App = () => {
                         <button
                             onClick={onClose}
                             className="px-8 py-3 bg-gradient-to-r from-red-600 to-rose-700 text-white font-semibold rounded-xl shadow-lg hover:from-red-700 hover:to-rose-800 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
+                        >
+                            關閉
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    const GeminiResponseModal = ({ isOpen, onClose, title, content, isLoading }) => {
+        if (!isOpen) return null;
+
+        return (
+            <div className="fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center p-4 z-50">
+                <div className="bg-gradient-to-br from-gray-700 to-gray-900 text-white rounded-3xl shadow-2xl p-8 w-full max-w-lg max-h-[90vh] flex flex-col">
+                    <h2 className="text-2xl font-bold mb-4 text-center">{title}</h2>
+                    <div className="flex-grow overflow-auto mb-6 p-4 bg-gray-800 rounded-lg border border-gray-600">
+                        {isLoading ? (
+                            <div className="flex justify-center items-center h-full">
+                                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+                                <span className="ml-3 text-lg">載入中...</span>
+                            </div>
+                        ) : (
+                            <p className="text-gray-100 whitespace-pre-wrap">{content}</p>
+                        )}
+                    </div>
+                    <div className="flex justify-end">
+                        <button
+                            onClick={onClose}
+                            className="px-6 py-2 bg-gradient-to-r from-red-500 to-rose-600 text-white rounded-xl shadow-lg hover:from-red-600 hover:to-rose-700 transition transform hover:scale-105 active:scale-95"
                         >
                             關閉
                         </button>
@@ -1547,7 +1755,7 @@ const App = () => {
                         開始分析
                     </button>
                     <button
-                        onClick={exportToCsv} // Reverted to original call
+                        onClick={exportToCsv}
                         className="px-8 py-4 bg-gradient-to-r from-purple-600 to-indigo-700 text-white font-semibold rounded-2xl shadow-xl hover:from-purple-700 hover:to-indigo-800 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95"
                         disabled={currentlyDisplayedRankedItems.length === 0}
                     >
@@ -1560,6 +1768,26 @@ const App = () => {
                     >
                         重設
                     </button>
+                </div>
+
+                {/* Gemini AI 主介面按鈕 */}
+                <div className="mb-8 p-6 border border-gray-200 rounded-2xl bg-gray-50 shadow-md flex justify-center gap-6">
+                    <button
+                        onClick={triggerGeminiAnalysis}
+                        className="px-8 py-4 bg-gradient-to-r from-blue-600 to-cyan-700 text-white font-semibold rounded-2xl shadow-xl hover:from-blue-700 hover:to-cyan-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95"
+                        disabled={currentlyDisplayedRankedItems.length === 0}
+                    >
+                        ✨ 分析結果洞察
+                    </button>
+                    {rankingField === FIELD_MAPPING[1][1] && (
+                        <button
+                            onClick={triggerGeminiPlaylist}
+                            className="px-8 py-4 bg-gradient-to-r from-pink-600 to-red-700 text-white font-semibold rounded-2xl shadow-xl hover:from-pink-700 hover:to-red-800 focus:outline-none focus:ring-2 focus:ring-pink-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95"
+                            disabled={currentlyDisplayedRankedItems.length === 0}
+                        >
+                            ✨ Gemini 推薦歌單
+                        </button>
+                    )}
                 </div>
 
                 {/* 結果顯示區 */}
@@ -1640,7 +1868,7 @@ const App = () => {
                                             </tr>
                                         );
                                     } else {
-                                        const [item_data, primary_metric, total_ms, count, avg_ms] = item;
+                                        const [item_data, primary_metric, total_ms, count] = item;
                                         const rankNum = index + 1;
 
                                         let primaryMetricDisplay = primary_metric;
@@ -1648,7 +1876,7 @@ const App = () => {
                                             primaryMetricDisplay = formatMsToMinSec(primary_metric);
                                         }
                                         const totalDurationStr = formatMsToMinSec(total_ms);
-                                        const avgDurationStr = formatMsToMinSec(avg_ms);
+                                        const avgDurationStr = formatMsToMinSec(item[4]);
 
                                         let displayCells = [
                                             <td key="rank" className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-center">{rankNum}</td>
@@ -1720,8 +1948,6 @@ const App = () => {
                 searchTerm={detailSearchTerm}
                 onSearchChange={setDetailSearchTerm}
                 onSearch={() => {
-                    // Re-trigger re-rendering of filteredRecords in DetailModal by changing searchTerm state
-                    // The actual filtering logic is inside useMemo in DetailModal
                     setDetailSearchTerm(detailSearchTerm);
                 }}
                 onClearSearch={() => setDetailSearchTerm("")}
@@ -1729,6 +1955,7 @@ const App = () => {
                 searchLyricsOnline={searchLyricsOnline}
                 searchAlbumReviewOnline={searchAlbumReviewOnline}
                 searchArtistBioOnline={searchArtistBioOnline}
+                onSongInsight={(song, artist) => callGeminiAPI(`Given the song title '${song}' by '${artist}', provide a concise summary of its main themes, lyrical meaning, or general mood. Keep it under 150 words.`, `歌曲洞察: ${song}`)}
             />
 
             <ArtistModal
@@ -1740,6 +1967,15 @@ const App = () => {
                 onAlbumSelect={handleArtistAlbumSelect}
                 onSongDoubleClick={handleArtistSongDoubleClick}
                 onArtistBioSearch={searchArtistBioOnline}
+                onArtistInsight={(artist) => callGeminiAPI(`Given the artist name '${artist}', provide a concise overview of their musical style, key influences, and overall impact on music. Keep it under 200 words.`, `歌手洞察: ${artist}`)}
+            />
+
+            <GeminiResponseModal
+                isOpen={isGeminiModalOpen}
+                onClose={() => setIsGeminiModalOpen(false)}
+                title={geminiModalTitle}
+                content={geminiModalContent}
+                isLoading={isGeminiLoading}
             />
         </div>
     );
