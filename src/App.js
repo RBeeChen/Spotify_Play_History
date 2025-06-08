@@ -53,7 +53,7 @@ const filterDataByDate = (data_list, start_date_obj, end_date_obj) => {
             continue;
         }
         try {
-            const item_date_str = item.ts.substring(0, 10); // Extract YYYY-MM-DD
+            const item_date_str = item.ts.substring(0, 10); // ExtractYYYY-MM-DD
             const item_date = new Date(item_date_str); // Create Date object
 
             // Normalize dates to start of day for comparison
@@ -633,7 +633,7 @@ const App = () => {
                 const recordDateStr = record.ts;
                 if (recordDateStr) {
                     try {
-                        const recordDate = new Date(recordDateStr.substring(0, 10)); // YYYY-MM-DD
+                        const recordDate = new Date(recordDateStr.substring(0, 10)); //YYYY-MM-DD
                         const startObj = dateFilterEnabled ? parseDateFromString(startDate) : null;
                         const endObj = dateFilterEnabled ? parseDateFromString(endDate) : null;
 
@@ -678,6 +678,8 @@ const App = () => {
             if (typeof clickedItemData === 'string' && clickedItemData.includes(' - ')) {
                 const [songName, artistName] = clickedItemData.split(' - ');
                 detailsTitle = `歌曲 '${songName}' (${artistName}) 詳細記錄`;
+            } else {
+                detailsTitle = `單曲詳細記錄: ${String(clickedItemData)}`;
             }
         } else if (currentFieldToRankKey === "ms_played") {
             if (typeof clickedItemData === 'string' && clickedItemData.includes(' - ')) {
@@ -824,7 +826,7 @@ const App = () => {
     }, [artistName]); // artistName is from the parent modal state
 
 
-    const exportToCsv = useCallback(() => {
+    const exportToCsv = useCallback(() => { // Removed parameters here
         if (!currentlyDisplayedRankedItems.length) {
             alert("沒有可匯出的數據。");
             return;
@@ -909,15 +911,7 @@ const App = () => {
                     }
                 } else if (currentFieldToRankKey === "spotify_track_uri" || currentFieldToRankKey === "master_metadata_album_artist_name") {
                     row_data.push(String(item_data), primaryMetricDisplay, totalDurationStrVal, avgDurationStrVal);
-                } else if (currentFieldToRankKey === "ms_played") {
-                    let itemDisplayName = "";
-                    if (typeof item_data === 'string' && item_data.includes(' - ')) {
-                        itemDisplayName = item_data;
-                    } else {
-                        itemDisplayName = String(item_data);
-                    }
-                    row_data.push(itemDisplayName, formatMsToMinSec(primary_metric_val), count_val, avgDurationStrVal);
-                } else { // Single item (platform, country, reason, etc.)
+                } else { // Single item (platform, country, reason, etc.) or ms_played
                     row_data.push(String(item_data), primaryMetricDisplay, totalDurationStrVal, avgDurationStrVal);
                 }
                 dataRows.push(row_data);
@@ -945,10 +939,10 @@ const App = () => {
         URL.revokeObjectURL(url);
         setStatus("CSV 已成功匯出。");
         alert("排行結果已成功匯出。");
-    }, [currentlyDisplayedRankedItems, dateFilterEnabled, startDate, endDate, trendAnalysisType, rankingField, rankMetric, currentFieldToRankKey]);
+    }, [currentlyDisplayedRankedItems, dateFilterEnabled, startDate, endDate, trendAnalysisType, rankingField, rankMetric, currentFieldToRankKey]); // Dependencies are state variables it CLOSES OVER
 
 
-    const exportDetailRecordsToCsv = useCallback((recordsToDisplay, title) => {
+    const exportDetailRecordsToCsv = useCallback((recordsToDisplay, title, currentMaxPlayTimes) => {
         if (!recordsToDisplay.length) {
             alert("沒有可匯出的詳細記錄。");
             return;
@@ -979,10 +973,10 @@ const App = () => {
             const ms_played_int = getMsFromRecord(ms_played_raw);
             const formatted_duration = formatMsToMinSec(ms_played_int);
 
-            // For simplicity in web, calculate percentage only if maxPlayTimes is available for that URI
+            // For simplicity in web, calculate percentage only if currentMaxPlayTimes is available for that URI
             let play_completion_percentage = "N/A";
-            if (detailMaxPlayTimes && uri && detailMaxPlayTimes[uri] > 0) {
-                const percentage = (ms_played_int / detailMaxPlayTimes[uri]) * 100;
+            if (currentMaxPlayTimes && uri && currentMaxPlayTimes[uri] > 0) {
+                const percentage = (ms_played_int / currentMaxPlayTimes[uri]) * 100;
                 play_completion_percentage = `${percentage.toFixed(1)}%`;
             }
 
@@ -1009,7 +1003,7 @@ const App = () => {
         URL.revokeObjectURL(url);
         setStatus("詳細記錄已成功匯出。");
         alert("詳細記錄已成功匯出。");
-    }, [detailMaxPlayTimes]);
+    }, []);
 
 
     // Effect to manage main search input state
@@ -1021,11 +1015,12 @@ const App = () => {
 
 
     // Detail Modal Component
-    const DetailModal = ({ isOpen, onClose, records, title, maxPlayTimes, searchTerm, onSearchChange, onSearch, onClearSearch, onExport }) => {
-        if (!isOpen) return null;
-
+    const DetailModal = ({ isOpen, onClose, records, title, maxPlayTimes, searchTerm, onSearchChange, onSearch, onClearSearch, onExport, searchLyricsOnline, searchAlbumReviewOnline, searchArtistBioOnline }) => {
+        // Ensure useMemo is always called when DetailModal is rendered
         const filteredRecords = useMemo(() => {
-            if (!searchTerm) return records;
+            // Only perform filtering if the modal is logically open and a search term exists
+            if (!isOpen || !searchTerm) return records;
+
             const searchTermLower = searchTerm.toLowerCase();
             return records.filter(record => {
                 const fieldsToSearch = [
@@ -1046,118 +1041,139 @@ const App = () => {
                 }
                 return fieldsToSearch.some(field => String(field).toLowerCase().includes(searchTermLower));
             });
-        }, [records, searchTerm]);
+        }, [isOpen, records, searchTerm]); // Add isOpen to dependencies
 
+        // No conditional return at the top level of the component for rendering JSX
         const firstRecord = records[0] || {};
         const item_name_for_web_search = firstRecord.master_metadata_track_name || '';
         const artist_name_for_web_search = firstRecord.master_metadata_album_artist_name || '';
         const album_name_for_web_search = firstRecord.master_metadata_album_album_name || '';
 
         return (
-            <div ref={detailModalRef} className="fixed inset-0 bg-gray-600 bg-opacity-50 flex justify-center items-center p-4 z-50">
-                <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-5xl max-h-[90vh] flex flex-col">
-                    <h2 className="text-xl font-bold mb-4">{title}</h2>
+            <div ref={detailModalRef} className={`fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center p-4 z-50 transition-opacity duration-300 ${isOpen ? 'opacity-100 visible' : 'opacity-0 invisible'}`}>
+                {isOpen && ( // Conditionally render inner content only if modal is open
+                    <div className="bg-gradient-to-br from-purple-800 to-indigo-900 text-white rounded-3xl shadow-2xl p-8 w-full max-w-5xl max-h-[95vh] flex flex-col transform scale-95 opacity-0 animate-fade-in-up">
+                        <style>{`
+                            @keyframes fade-in-up {
+                                from { opacity: 0; transform: translateY(20px) scale(0.95); }
+                                to { opacity: 1; transform: translateY(0) scale(1); }
+                            }
+                            .animate-fade-in-up {
+                                animation: fade-in-up 0.3s ease-out forwards;
+                            }
+                        `}</style>
+                        <h2 className="text-3xl font-bold mb-6 text-center drop-shadow-md">{title}</h2>
 
-                    <div className="flex items-center space-x-2 mb-4">
-                        <label htmlFor="detailSearch" className="text-gray-700">搜尋詳細記錄:</label>
-                        <input
-                            id="detailSearch"
-                            type="text"
-                            className="flex-grow p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
-                            value={searchTerm}
-                            onChange={(e) => onSearchChange(e.target.value)}
-                        />
-                        <button
-                            onClick={onSearch}
-                            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-                        >
-                            搜尋
-                        </button>
-                        <button
-                            onClick={onClearSearch}
-                            className="px-4 py-2 bg-gray-300 text-gray-800 rounded-md hover:bg-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2"
-                        >
-                            清除
-                        </button>
-                        <button
-                            onClick={onExport}
-                            className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ml-auto"
-                        >
-                            匯出詳細記錄為 CSV
-                        </button>
-                    </div>
-
-                    <div className="flex flex-wrap gap-2 mb-4">
-                        {item_name_for_web_search && artist_name_for_web_search && (
+                        <div className="flex flex-wrap items-center space-x-2 mb-6 bg-gray-800 p-4 rounded-xl shadow-inner">
+                            <label htmlFor="detailSearch" className="text-gray-200 text-lg font-medium">搜尋詳細記錄:</label>
+                            <input
+                                id="detailSearch"
+                                type="text"
+                                className="flex-grow p-3 border border-gray-600 rounded-lg bg-gray-700 text-white placeholder-gray-400 focus:ring-blue-500 focus:border-blue-500 focus:ring-2 transition duration-200"
+                                value={searchTerm}
+                                onChange={(e) => onSearchChange(e.target.value)}
+                                placeholder="搜尋..."
+                            />
                             <button
-                                onClick={() => searchLyricsOnline(item_name_for_web_search, artist_name_for_web_search)}
-                                className="px-3 py-1 bg-purple-600 text-white text-sm rounded-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                                onClick={onSearch}
+                                className="px-6 py-3 bg-gradient-to-r from-blue-500 to-blue-700 text-white rounded-xl shadow-lg hover:from-blue-600 hover:to-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
                             >
-                                Google 搜尋歌詞
+                                搜尋
                             </button>
-                        )}
-                        {album_name_for_web_search && artist_name_for_web_search && (
                             <button
-                                onClick={() => searchAlbumReviewOnline(album_name_for_web_search, artist_name_for_web_search)}
-                                className="px-3 py-1 bg-orange-600 text-white text-sm rounded-md hover:bg-orange-700 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                                onClick={onClearSearch}
+                                className="px-6 py-3 bg-gradient-to-r from-gray-400 to-gray-600 text-gray-900 rounded-xl shadow-lg hover:from-gray-500 hover:to-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
                             >
-                                Google 搜尋專輯評價
+                                清除
                             </button>
-                        )}
-                    </div>
+                            <button
+                                onClick={onExport}
+                                className="px-6 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl shadow-lg hover:from-green-600 hover:to-emerald-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95 ml-auto"
+                            >
+                                匯出 CSV
+                            </button>
+                        </div>
 
-                    <div className="flex-grow overflow-auto border border-gray-300 rounded-md">
-                        <table className="min-w-full divide-y divide-gray-200">
-                            <thead className="bg-gray-50 sticky top-0">
-                                <tr>
-                                    {["播放時間 (UTC)", "播放平台", "播放時長 (分:秒)", "歌曲名稱", "歌手", "專輯名稱",
-                                        "播放完整度(%)", "開始原因", "結束原因", "隨機播放", "是否跳過", "離線播放", "隱身模式"].map(header => (
-                                            <th key={header} className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                {header}
-                                            </th>
-                                        ))}
-                                </tr>
-                            </thead>
-                            <tbody className="bg-white divide-y divide-gray-200">
-                                {filteredRecords.map((record, index) => {
-                                    const ms_played_int = getMsFromRecord(record.ms_played || 0);
-                                    const uri = record.spotify_track_uri;
-                                    let play_completion_percentage = "N/A";
-                                    if (maxPlayTimes && uri && maxPlayTimes[uri] > 0) {
-                                        const percentage = (ms_played_int / maxPlayTimes[uri]) * 100;
-                                        play_completion_percentage = `${percentage.toFixed(1)}%`;
-                                    }
+                        <div className="flex flex-wrap gap-3 mb-6 justify-center">
+                            {item_name_for_web_search && artist_name_for_web_search && (
+                                <button
+                                    onClick={() => searchLyricsOnline(item_name_for_web_search, artist_name_for_web_search)}
+                                    className="px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-600 text-white text-md rounded-lg shadow-md hover:from-purple-600 hover:to-pink-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
+                                >
+                                    Google 搜尋歌詞
+                                </button>
+                            )}
+                            {album_name_for_web_search && artist_name_for_web_search && (
+                                <button
+                                    onClick={() => searchAlbumReviewOnline(album_name_for_web_search, artist_name_for_web_search)}
+                                    className="px-4 py-2 bg-gradient-to-r from-orange-500 to-red-600 text-white text-md rounded-lg shadow-md hover:from-orange-600 hover:to-red-700 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
+                                >
+                                    Google 搜尋專輯評價
+                                </button>
+                            )}
+                            {artist_name_for_web_search && ( 
+                                <button
+                                    onClick={() => searchArtistBioOnline(artist_name_for_web_search)}
+                                    className="px-4 py-2 bg-gradient-to-r from-teal-500 to-cyan-600 text-white text-md rounded-lg shadow-md hover:from-teal-600 hover:to-cyan-700 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
+                                >
+                                    Google 搜尋藝術家簡介
+                                </button>
+                            )}
+                        </div>
 
-                                    return (
-                                        <tr key={index} className="hover:bg-gray-50">
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{record.ts || 'N/A'}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{record.platform || 'N/A'}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-right">{formatMsToMinSec(ms_played_int)}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{record.master_metadata_track_name || 'N/A'}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{record.master_metadata_album_artist_name || 'N/A'}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{record.master_metadata_album_album_name || 'N/A'}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-center">{play_completion_percentage}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{record.reason_start || 'N/A'}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{record.reason_end || 'N/A'}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-center">{record.shuffle === true ? "是" : (record.shuffle === false ? "否" : "N/A")}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-center">{record.skipped === true ? "是" : (record.skipped === false ? "否" : "N/A")}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-center">{record.offline === true ? "是" : (record.offline === false ? "否" : "N/A")}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-center">{record.incognito_mode === true ? "是" : (record.incognito_mode === false ? "否" : "N/A")}</td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
+                        <div className="flex-grow overflow-auto border border-gray-600 rounded-xl shadow-inner">
+                            <table className="min-w-full divide-y divide-gray-700">
+                                <thead className="bg-gray-800 sticky top-0">
+                                    <tr>
+                                        {["播放時間 (UTC)", "播放平台", "播放時長 (分:秒)", "歌曲名稱", "歌手", "專輯名稱",
+                                            "播放完整度(%)", "開始原因", "結束原因", "隨機播放", "是否跳過", "離線播放", "隱身模式"].map(header => (
+                                                <th key={header} className="px-4 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">
+                                                    {header}
+                                                </th>
+                                            ))}
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-gray-900 divide-y divide-gray-700">
+                                    {filteredRecords.map((record, index) => {
+                                        const ms_played_int = getMsFromRecord(record.ms_played || 0);
+                                        const uri = record.spotify_track_uri;
+                                        let play_completion_percentage = "N/A";
+                                        if (maxPlayTimes && uri && maxPlayTimes[uri] > 0) {
+                                            const percentage = (ms_played_int / maxPlayTimes[uri]) * 100;
+                                            play_completion_percentage = `${percentage.toFixed(1)}%`;
+                                        }
+
+                                        return (
+                                            <tr key={index} className="hover:bg-gray-700 transition-colors duration-150 ease-in-out">
+                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{record.ts || 'N/A'}</td>
+                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{record.platform || 'N/A'}</td>
+                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200 text-right">{formatMsToMinSec(ms_played_int)}</td>
+                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{record.master_metadata_track_name || 'N/A'}</td>
+                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{record.master_metadata_album_artist_name || 'N/A'}</td>
+                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{record.master_metadata_album_album_name || 'N/A'}</td>
+                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200 text-center">{play_completion_percentage}</td>
+                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{record.reason_start || 'N/A'}</td>
+                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{record.reason_end || 'N/A'}</td>
+                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{record.shuffle === true ? "是" : (record.shuffle === false ? "否" : "N/A")}</td>
+                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{record.skipped === true ? "是" : (record.skipped === false ? "否" : "N/A")}</td>
+                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{record.offline === true ? "是" : (record.offline === false ? "否" : "N/A")}</td>
+                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{record.incognito_mode === true ? "是" : (record.incognito_mode === false ? "否" : "N/A")}</td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div className="flex justify-end mt-6">
+                            <button
+                                onClick={onClose}
+                                className="px-8 py-3 bg-gradient-to-r from-red-600 to-rose-700 text-white font-semibold rounded-xl shadow-lg hover:from-red-700 hover:to-rose-800 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
+                            >
+                                關閉
+                            </button>
+                        </div>
                     </div>
-                    <div className="flex justify-end mt-4">
-                        <button
-                            onClick={onClose}
-                            className="px-6 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
-                        >
-                            關閉
-                        </button>
-                    </div>
-                </div>
+                )}
             </div>
         );
     };
@@ -1167,37 +1183,37 @@ const App = () => {
         if (!isOpen) return null;
 
         return (
-            <div ref={artistModalRef} className="fixed inset-0 bg-gray-600 bg-opacity-50 flex justify-center items-center p-4 z-50">
-                <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-6xl max-h-[90vh] flex flex-col">
-                    <h2 className="text-xl font-bold mb-4">歌手詳細資料: {artistName}</h2>
+            <div ref={artistModalRef} className={`fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center p-4 z-50 transition-opacity duration-300 ${isOpen ? 'opacity-100 visible' : 'opacity-0 invisible'}`}>
+                <div className="bg-gradient-to-br from-green-800 to-emerald-900 text-white rounded-3xl shadow-2xl p-8 w-full max-w-6xl max-h-[95vh] flex flex-col transform scale-95 opacity-0 animate-fade-in-up">
+                    <h2 className="text-3xl font-bold mb-6 text-center drop-shadow-md">歌手詳細資料: {artistName}</h2>
 
-                    <div className="flex justify-center mb-4">
+                    <div className="flex justify-center mb-6">
                         <button
                             onClick={() => onArtistBioSearch(artistName)}
-                            className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2"
+                            className="px-6 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-xl shadow-lg hover:from-purple-600 hover:to-indigo-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
                         >
                             Google 搜尋藝術家簡介
                         </button>
                     </div>
 
-                    <div className="flex flex-grow overflow-hidden gap-4">
+                    <div className="flex flex-grow overflow-hidden gap-6">
                         {/* Left Pane: Albums */}
-                        <div className="w-1/3 flex flex-col border border-gray-300 rounded-md p-2 overflow-auto">
-                            <h3 className="text-lg font-semibold mb-2 sticky top-0 bg-white z-10 p-1 -mx-2 -mt-2 border-b">專輯列表</h3>
-                            <table className="min-w-full divide-y divide-gray-200">
-                                <thead className="bg-gray-50 sticky top-0">
+                        <div className="w-1/3 flex flex-col border border-gray-600 rounded-xl p-4 overflow-auto bg-gray-800 shadow-inner">
+                            <h3 className="text-xl font-semibold mb-4 sticky top-0 bg-gray-800 z-10 p-2 -mx-4 -mt-4 border-b border-gray-700">專輯列表</h3>
+                            <table className="min-w-full divide-y divide-gray-700">
+                                <thead className="bg-gray-900 sticky top-0">
                                     <tr>
-                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">專輯名稱</th>
-                                        <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">播放次數</th>
-                                        <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">總時長</th>
+                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">專輯名稱</th>
+                                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-300 uppercase tracking-wider">播放次數</th>
+                                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-300 uppercase tracking-wider">總時長</th>
                                     </tr>
                                 </thead>
-                                <tbody className="bg-white divide-y divide-gray-200">
+                                <tbody className="bg-gray-800 divide-y divide-gray-700">
                                     {albumsData.map((album, index) => (
-                                        <tr key={index} className="hover:bg-gray-50 cursor-pointer" onClick={() => onAlbumSelect(album.albumName)}>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{album.albumName}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-right">{album.count}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-right">{album.totalDuration}</td>
+                                        <tr key={index} className="hover:bg-gray-700 cursor-pointer transition-colors duration-150 ease-in-out" onClick={() => onAlbumSelect(album.albumName)}>
+                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{album.albumName}</td>
+                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200 text-right">{album.count}</td>
+                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200 text-right">{album.totalDuration}</td>
                                         </tr>
                                     ))}
                                 </tbody>
@@ -1205,24 +1221,24 @@ const App = () => {
                         </div>
 
                         {/* Right Pane: Songs */}
-                        <div className="w-2/3 flex flex-col border border-gray-300 rounded-md p-2 overflow-auto">
-                            <h3 className="text-lg font-semibold mb-2 sticky top-0 bg-white z-10 p-1 -mx-2 -mt-2 border-b">歌曲列表</h3>
-                            <table className="min-w-full divide-y divide-gray-200">
-                                <thead className="bg-gray-50 sticky top-0">
+                        <div className="w-2/3 flex flex-col border border-gray-600 rounded-xl p-4 overflow-auto bg-gray-800 shadow-inner">
+                            <h3 className="text-xl font-semibold mb-4 sticky top-0 bg-gray-800 z-10 p-2 -mx-4 -mt-4 border-b border-gray-700">歌曲列表</h3>
+                            <table className="min-w-full divide-y divide-gray-700">
+                                <thead className="bg-gray-900 sticky top-0">
                                     <tr>
-                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">歌曲名稱</th>
-                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">所屬專輯</th>
-                                        <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">播放次數</th>
-                                        <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">總時長</th>
+                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">歌曲名稱</th>
+                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">所屬專輯</th>
+                                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-300 uppercase tracking-wider">播放次數</th>
+                                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-300 uppercase tracking-wider">總時長</th>
                                     </tr>
                                 </thead>
-                                <tbody className="bg-white divide-y divide-gray-200">
+                                <tbody className="bg-gray-800 divide-y divide-gray-700">
                                     {songsData.map((song, index) => (
-                                        <tr key={index} className="hover:bg-gray-50 cursor-pointer" onDoubleClick={() => onSongDoubleClick(song.songName, song.albumName)}>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{song.songName}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{song.albumName}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-right">{song.count}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-right">{song.totalDuration}</td>
+                                        <tr key={index} className="hover:bg-gray-700 cursor-pointer transition-colors duration-150 ease-in-out" onDoubleClick={() => onSongDoubleClick(song.songName, song.albumName)}>
+                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{song.songName}</td>
+                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{song.albumName}</td>
+                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200 text-right">{song.count}</td>
+                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200 text-right">{song.totalDuration}</td>
                                         </tr>
                                     ))}
                                 </tbody>
@@ -1230,10 +1246,10 @@ const App = () => {
                         </div>
                     </div>
 
-                    <div className="flex justify-end mt-4">
+                    <div className="flex justify-end mt-6">
                         <button
                             onClick={onClose}
-                            className="px-6 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+                            className="px-8 py-3 bg-gradient-to-r from-red-600 to-rose-700 text-white font-semibold rounded-xl shadow-lg hover:from-red-700 hover:to-rose-800 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
                         >
                             關閉
                         </button>
@@ -1245,7 +1261,7 @@ const App = () => {
 
 
     return (
-        <div className="min-h-screen bg-gray-100 p-4 font-inter">
+        <div className="min-h-screen bg-gradient-to-br from-gray-200 to-gray-300 p-6 font-inter text-gray-800">
             <style>
                 {`
                 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -1328,13 +1344,13 @@ const App = () => {
                 `}
             </style>
 
-            <div className="bg-white p-6 rounded-xl shadow-lg w-full mx-auto">
-                <h1 className="text-3xl font-bold text-center text-gray-800 mb-6">Spotify 播放記錄分析器</h1>
+            <div className="bg-white p-8 rounded-3xl shadow-xl w-full mx-auto max-w-7xl">
+                <h1 className="text-4xl font-bold text-center text-gray-900 mb-8 tracking-wide">Spotify 播放記錄分析器</h1>
 
                 {/* 檔案選取區 */}
-                <div className="mb-6 p-4 border border-gray-200 rounded-lg bg-gray-50 shadow-sm">
-                    <h2 className="text-xl font-semibold text-gray-700 mb-3">檔案選取</h2>
-                    <div className="flex items-center space-x-4">
+                <div className="mb-8 p-6 border border-gray-200 rounded-2xl bg-gray-50 shadow-md">
+                    <h2 className="text-2xl font-semibold text-gray-700 mb-4">檔案選取</h2>
+                    <div className="flex flex-col md:flex-row items-center space-y-4 md:space-y-0 md:space-x-6">
                         <input
                             type="file"
                             ref={fileInputRef}
@@ -1346,14 +1362,14 @@ const App = () => {
                         />
                         <label
                             htmlFor="file-upload"
-                            className="inline-flex items-center justify-center px-5 py-2 border border-transparent text-base font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 cursor-pointer transition duration-150 ease-in-out shadow-md"
+                            className="inline-flex items-center justify-center px-8 py-3 border border-transparent text-lg font-medium rounded-xl text-white bg-gradient-to-r from-indigo-600 to-purple-700 hover:from-indigo-700 hover:to-purple-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 cursor-pointer transition duration-300 ease-in-out shadow-lg hover:shadow-xl transform hover:scale-105 active:scale-95"
                         >
                             選擇 JSON 檔案
                         </label>
-                        <span className="text-gray-600 text-lg">{selectedFilesLabel}</span>
-                        <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden ml-auto">
+                        <span className="text-gray-700 text-xl flex-shrink-0">{selectedFilesLabel}</span>
+                        <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden flex-grow shadow-inner">
                             <div
-                                className="h-full bg-blue-500 rounded-full transition-all duration-300 ease-out"
+                                className="h-full bg-gradient-to-r from-blue-400 to-blue-600 rounded-full transition-all duration-300 ease-out"
                                 style={{ width: `${progress}%` }}
                             ></div>
                         </div>
@@ -1361,51 +1377,57 @@ const App = () => {
                 </div>
 
                 {/* 篩選條件區 */}
-                <div className="mb-6 p-4 border border-gray-200 rounded-lg bg-gray-50 shadow-sm">
-                    <h2 className="text-xl font-semibold text-gray-700 mb-3">篩選與排行條件</h2>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+                <div className="mb-8 p-6 border border-gray-200 rounded-2xl bg-gray-50 shadow-md">
+                    <h2 className="text-2xl font-semibold text-gray-700 mb-4">篩選與排行條件</h2>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
                         {/* 日期篩選 */}
-                        <div className="flex items-center space-x-2">
-                            <input
-                                type="checkbox"
-                                id="dateFilter"
-                                checked={dateFilterEnabled}
-                                onChange={(e) => setDateFilterEnabled(e.target.checked)}
-                                className="form-checkbox h-5 w-5 text-indigo-600 rounded focus:ring-indigo-500"
-                            />
-                            <label htmlFor="dateFilter" className="text-gray-700 font-medium">依日期篩選?</label>
-                            <label htmlFor="startDate" className="text-gray-700">開始日期 (YYYYMMDD):</label>
-                            <input
-                                type="text"
-                                id="startDate"
-                                className={`p-2 border rounded-md w-32 ${dateFilterEnabled ? 'border-gray-300' : 'bg-gray-100 border-gray-200 cursor-not-allowed'}`}
-                                value={startDate}
-                                onChange={(e) => setStartDate(e.target.value)}
-                                disabled={!dateFilterEnabled}
-                                placeholder="20230101"
-                                title="請輸入YYYYMMDD 格式的日期，例如 20230101"
-                            />
-                            <label htmlFor="endDate" className="text-gray-700">結束日期 (YYYYMMDD):</label>
-                            <input
-                                type="text"
-                                id="endDate"
-                                className={`p-2 border rounded-md w-32 ${dateFilterEnabled ? 'border-gray-300' : 'bg-gray-100 border-gray-200 cursor-not-allowed'}`}
-                                value={endDate}
-                                onChange={(e) => setEndDate(e.target.value)}
-                                disabled={!dateFilterEnabled}
-                                placeholder="20231231"
-                                title="請輸入YYYYMMDD 格式的日期，例如 20231231"
-                            />
+                        <div className="flex flex-col space-y-3">
+                            <div className="flex items-center space-x-2">
+                                <input
+                                    type="checkbox"
+                                    id="dateFilter"
+                                    checked={dateFilterEnabled}
+                                    onChange={(e) => setDateFilterEnabled(e.target.checked)}
+                                    className="form-checkbox h-5 w-5 text-indigo-600 rounded focus:ring-indigo-500"
+                                />
+                                <label htmlFor="dateFilter" className="text-gray-700 font-medium text-lg">依日期篩選?</label>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                                <label htmlFor="startDate" className="text-gray-700">開始日期 (YYYYMMDD):</label>
+                                <input
+                                    type="text"
+                                    id="startDate"
+                                    className={`p-3 border rounded-lg w-full ${dateFilterEnabled ? 'border-gray-300 bg-white' : 'bg-gray-100 border-gray-200 cursor-not-allowed'} focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm`}
+                                    value={startDate}
+                                    onChange={(e) => setStartDate(e.target.value)}
+                                    disabled={!dateFilterEnabled}
+                                    placeholder="20230101"
+                                    title="請輸入YYYYMMDD 格式的日期，例如 20230101"
+                                />
+                            </div>
+                            <div className="flex items-center space-x-2">
+                                <label htmlFor="endDate" className="text-gray-700">結束日期 (YYYYMMDD):</label>
+                                <input
+                                    type="text"
+                                    id="endDate"
+                                    className={`p-3 border rounded-lg w-full ${dateFilterEnabled ? 'border-gray-300 bg-white' : 'bg-gray-100 border-gray-200 cursor-not-allowed'} focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm`}
+                                    value={endDate}
+                                    onChange={(e) => setEndDate(e.target.value)}
+                                    disabled={!dateFilterEnabled}
+                                    placeholder="20231231"
+                                    title="請輸入YYYYMMDD 格式的日期，例如 20231231"
+                                />
+                            </div>
                         </div>
 
                         {/* 排行項目與數量 */}
-                        <div className="flex items-center space-x-2">
-                            <label htmlFor="rankingField" className="text-gray-700">排行項目:</label>
+                        <div className="flex flex-col space-y-3">
+                            <label htmlFor="rankingField" className="text-gray-700 text-lg">排行項目:</label>
                             <select
                                 id="rankingField"
                                 value={rankingField}
                                 onChange={handleRankingFieldChange}
-                                className={`p-2 border rounded-md ${trendAnalysisType !== "無" ? 'bg-gray-100 border-gray-200 cursor-not-allowed' : 'border-gray-300'}`}
+                                className={`p-3 border rounded-lg w-full ${trendAnalysisType !== "無" ? 'bg-gray-100 border-gray-200 cursor-not-allowed' : 'border-gray-300 bg-white'} focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm`}
                                 disabled={trendAnalysisType !== "無"}
                                 title="選擇您希望分析的播放記錄類型"
                             >
@@ -1413,11 +1435,11 @@ const App = () => {
                                     <option key={key} value={name}>{name}</option>
                                 ))}
                             </select>
-                            <label htmlFor="numResults" className="text-gray-700">顯示數量:</label>
+                            <label htmlFor="numResults" className="text-gray-700 text-lg">顯示數量:</label>
                             <input
                                 type="text"
                                 id="numResults"
-                                className="p-2 border border-gray-300 rounded-md w-24"
+                                className="p-3 border border-gray-300 rounded-lg w-full focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm"
                                 value={numResults}
                                 onChange={(e) => {
                                     const value = e.target.value;
@@ -1431,56 +1453,53 @@ const App = () => {
                         </div>
 
                         {/* 排行標準 */}
-                        <div className="flex items-center space-x-3">
-                            <span className="text-gray-700">排行標準:</span>
-                            <div className="flex space-x-2">
+                        <div className="flex flex-col space-y-3">
+                            <span className="text-gray-700 text-lg">排行標準:</span>
+                            <div className="flex flex-col space-y-2">
                                 <label className="inline-flex items-center">
                                     <input
                                         type="radio"
-                                        className="form-radio text-indigo-600 h-4 w-4"
+                                        className="form-radio text-indigo-600 h-5 w-5"
                                         name="rankMetric"
                                         value="count"
                                         checked={rankMetric === "count"}
                                         onChange={(e) => setRankMetric(e.target.value)}
                                         disabled={trendAnalysisType !== "無"}
                                     />
-                                    <span className="ml-1 text-gray-700">播放次數</span>
+                                    <span className="ml-2 text-gray-700">播放次數</span>
                                 </label>
                                 <label className="inline-flex items-center">
                                     <input
                                         type="radio"
-                                        className="form-radio text-indigo-600 h-4 w-4"
+                                        className="form-radio text-indigo-600 h-5 w-5"
                                         name="rankMetric"
                                         value="duration"
                                         checked={rankMetric === "duration"}
                                         onChange={(e) => setRankMetric(e.target.value)}
                                         disabled={trendAnalysisType !== "無"}
                                     />
-                                    <span className="ml-1 text-gray-700">總播放時長</span>
+                                    <span className="ml-2 text-gray-700">總播放時長</span>
                                 </label>
                                 <label className="inline-flex items-center">
                                     <input
                                         type="radio"
-                                        className="form-radio text-indigo-600 h-4 w-4"
+                                        className="form-radio text-indigo-600 h-5 w-5"
                                         name="rankMetric"
                                         value="avg_duration"
                                         checked={rankMetric === "avg_duration"}
                                         onChange={(e) => setRankMetric(e.target.value)}
                                         disabled={trendAnalysisType !== "無"}
                                     />
-                                    <span className="ml-1 text-gray-700">平均播放時長</span>
+                                    <span className="ml-2 text-gray-700">平均播放時長</span>
                                 </label>
                             </div>
-                        </div>
-
-                        {/* 趨勢分析選項 */}
-                        <div className="flex items-center space-x-2">
-                            <label htmlFor="trendAnalysis" className="text-gray-700">趨勢分析:</label>
+                            {/* 趨勢分析選項 */}
+                            <label htmlFor="trendAnalysis" className="text-gray-700 text-lg mt-4">趨勢分析:</label>
                             <select
                                 id="trendAnalysis"
                                 value={trendAnalysisType}
                                 onChange={handleTrendAnalysisChange}
-                                className="p-2 border border-gray-300 rounded-md"
+                                className="p-3 border border-gray-300 rounded-lg w-full focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm"
                                 title="選擇您希望進行的趨勢分析類型"
                             >
                                 {Object.values(TREND_ANALYSIS_TYPES).map((type) => (
@@ -1491,26 +1510,27 @@ const App = () => {
                     </div>
 
                     {/* 主結果搜尋框 */}
-                    <div className="flex items-center space-x-2 mt-4">
-                        <label htmlFor="mainSearch" className="text-gray-700">搜尋結果 (歌曲/專輯):</label>
+                    <div className="flex flex-col md:flex-row items-center space-y-3 md:space-y-0 md:space-x-4 mt-6">
+                        <label htmlFor="mainSearch" className="text-gray-700 text-lg flex-shrink-0">搜尋結果 (歌曲/專輯):</label>
                         <input
                             type="text"
                             id="mainSearch"
-                            className={`flex-grow p-2 border rounded-md ${mainSearchEnabled ? 'border-gray-300' : 'bg-gray-100 border-gray-200 cursor-not-allowed'}`}
+                            className={`flex-grow p-3 border rounded-lg ${mainSearchEnabled ? 'border-gray-300 bg-white' : 'bg-gray-100 border-gray-200 cursor-not-allowed'} focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm`}
                             value={mainSearchTerm}
                             onChange={(e) => setMainSearchTerm(e.target.value)}
                             disabled={!mainSearchEnabled}
+                            placeholder="輸入關鍵字搜尋..."
                         />
                         <button
                             onClick={filterMainResults}
-                            className={`px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${!mainSearchEnabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            className={`px-6 py-3 bg-gradient-to-r from-blue-500 to-blue-700 text-white rounded-xl shadow-lg hover:from-blue-600 hover:to-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95 ${!mainSearchEnabled ? 'opacity-50 cursor-not-allowed' : ''}`}
                             disabled={!mainSearchEnabled}
                         >
                             搜尋
                         </button>
                         <button
                             onClick={clearMainSearch}
-                            className={`px-4 py-2 bg-gray-300 text-gray-800 rounded-md hover:bg-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 ${!mainSearchEnabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            className={`px-6 py-3 bg-gradient-to-r from-gray-400 to-gray-600 text-gray-900 rounded-xl shadow-lg hover:from-gray-500 hover:to-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95 ${!mainSearchEnabled ? 'opacity-50 cursor-not-allowed' : ''}`}
                             disabled={!mainSearchEnabled}
                         >
                             清除搜尋
@@ -1519,41 +1539,33 @@ const App = () => {
                 </div>
 
                 {/* 操作按鈕 */}
-                <div className="mb-6 flex justify-center space-x-4">
+                <div className="mb-8 flex flex-col md:flex-row justify-center space-y-4 md:space-y-0 md:space-x-6">
                     <button
                         onClick={analyzeData}
-                        className="px-6 py-3 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition duration-150 ease-in-out"
+                        className="px-8 py-4 bg-gradient-to-r from-green-600 to-emerald-700 text-white font-semibold rounded-2xl shadow-xl hover:from-green-700 hover:to-emerald-800 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95"
                     >
                         開始分析
                     </button>
                     <button
-                        onClick={exportToCsv}
-                        className="px-6 py-3 bg-purple-600 text-white font-semibold rounded-lg shadow-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 transition duration-150 ease-in-out"
+                        onClick={exportToCsv} // Reverted to original call
+                        className="px-8 py-4 bg-gradient-to-r from-purple-600 to-indigo-700 text-white font-semibold rounded-2xl shadow-xl hover:from-purple-700 hover:to-indigo-800 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95"
                         disabled={currentlyDisplayedRankedItems.length === 0}
                     >
                         匯出 CSV
                     </button>
                     <button
                         onClick={resetAppState}
-                        className="px-6 py-3 bg-red-600 text-white font-semibold rounded-lg shadow-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition duration-150 ease-in-out"
+                        className="px-8 py-4 bg-gradient-to-r from-red-600 to-rose-700 text-white font-semibold rounded-2xl shadow-xl hover:from-red-700 hover:to-rose-800 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95"
                         title="清除所有載入的數據和篩選條件，重設應用程式狀態"
                     >
                         重設
                     </button>
                 </div>
 
-                {/* 依賴庫管理區 (說明性質，因為是網頁應用) */}
-                <div className="mb-6 p-4 border border-gray-200 rounded-lg bg-gray-50 shadow-sm">
-                    <h2 className="text-xl font-semibold text-gray-700 mb-3">依賴庫管理 (網頁相關)</h2>
-                    <p className="text-gray-600">
-                        這是一個網頁應用程式，不需要像 Python 腳本那樣單獨安裝依賴庫。所有功能都已內建。
-                    </p>
-                </div>
-
                 {/* 結果顯示區 */}
-                <div className="p-4 border border-gray-200 rounded-lg bg-gray-50 shadow-sm flex flex-col min-h-[300px]">
-                    <h2 className="text-xl font-semibold text-gray-700 mb-3">分析結果 (雙擊「單曲」、「歌曲名稱-歌手」、「專輯」或「歌手」項目可查看詳細資料)</h2>
-                    <div className="flex-grow overflow-auto rounded-md">
+                <div className="p-6 border border-gray-200 rounded-2xl bg-gray-50 shadow-md flex flex-col min-h-[350px]">
+                    <h2 className="text-2xl font-semibold text-gray-700 mb-4">分析結果 (雙擊「單曲」、「歌曲名稱-歌手」、「專輯」或「歌手」項目可查看詳細資料)</h2>
+                    <div className="flex-grow overflow-auto rounded-xl border border-gray-300 shadow-inner">
                         <table className="treeview-table">
                             <thead>
                                 {trendAnalysisType === "無" ? (
@@ -1610,10 +1622,17 @@ const App = () => {
                                 )}
                             </thead>
                             <tbody>
+                                {currentlyDisplayedRankedItems.length === 0 && (
+                                    <tr>
+                                        <td colSpan="100%" className="px-4 py-4 text-center text-gray-500">
+                                            沒有數據可顯示。請選擇 JSON 檔案並點擊「開始分析」。
+                                        </td>
+                                    </tr>
+                                )}
                                 {currentlyDisplayedRankedItems.map((item, index) => {
                                     if (trendAnalysisType !== "無") {
                                         return (
-                                            <tr key={index} className="hover:bg-gray-50">
+                                            <tr key={index} className="hover:bg-gray-100">
                                                 <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{item[0]}</td>
                                                 <td className="px-4 py-2 whitespace-normal text-sm text-gray-800">
                                                     {trendAnalysisType === TREND_ANALYSIS_TYPES.monthly_total_duration ? item[1] : item[1]}
@@ -1676,25 +1695,18 @@ const App = () => {
                                         }
 
                                         return (
-                                            <tr key={index} className="hover:bg-gray-50 cursor-pointer" onDoubleClick={() => showListeningDetails(index)}>
+                                            <tr key={index} className="hover:bg-gray-100 cursor-pointer" onDoubleClick={() => showListeningDetails(index)}>
                                                 {displayCells}
                                             </tr>
                                         );
                                     }
                                 })}
-                                {currentlyDisplayedRankedItems.length === 0 && (
-                                    <tr>
-                                        <td colSpan="100%" className="px-4 py-4 text-center text-gray-500">
-                                            沒有數據可顯示。請選擇 JSON 檔案並點擊「開始分析」。
-                                        </td>
-                                    </tr>
-                                )}
                             </tbody>
                         </table>
                     </div>
                 </div>
 
-                <div className="mt-4 text-center text-gray-600 text-sm">
+                <div className="mt-6 text-center text-gray-600 text-sm">
                     {status}
                 </div>
             </div>
@@ -1713,9 +1725,10 @@ const App = () => {
                     setDetailSearchTerm(detailSearchTerm);
                 }}
                 onClearSearch={() => setDetailSearchTerm("")}
-                onExport={() => exportDetailRecordsToCsv(detailRecords, detailModalTitle)}
+                onExport={() => exportDetailRecordsToCsv(detailRecords, detailModalTitle, detailMaxPlayTimes)}
                 searchLyricsOnline={searchLyricsOnline}
                 searchAlbumReviewOnline={searchAlbumReviewOnline}
+                searchArtistBioOnline={searchArtistBioOnline}
             />
 
             <ArtistModal
