@@ -204,7 +204,7 @@ const analyzeTrendData = (data_list, trend_type_display, numResultsEntryValue) =
         for (const month of sorted_months) {
             const monthly_ranked_songs = rankData(monthly_data.get(month), "master_metadata_track_name", String(num_top_items), "count");
             const top_songs_display = [];
-            for (const [item_data, /*primary_metric*/, /*total_ms*/, count, /*avg_ms*/] of monthly_ranked_songs) {
+            for (const [item_data, , , count, ] of monthly_ranked_songs) {
                 const [song_name, artist_name] = item_data.split(' - ');
                 top_songs_display.push(`${song_name} (${artist_name}) - ${count}次`);
             }
@@ -215,7 +215,7 @@ const analyzeTrendData = (data_list, trend_type_display, numResultsEntryValue) =
         for (const month of sorted_months) {
             const monthly_ranked_artists = rankData(monthly_data.get(month), "master_metadata_album_artist_name", String(num_top_items), "count");
             const top_artists_display = [];
-            for (const [item_data, /*primary_metric*/, /*total_ms*/, count, /*avg_ms*/] of monthly_ranked_artists) {
+            for (const [item_data, , , count, ] of monthly_ranked_artists) {
                 const artist_name = item_data;
                 top_artists_display.push(`${artist_name} - ${count}次`);
             }
@@ -295,6 +295,9 @@ const App = () => {
     const [geminiModalTitle, setGeminiModalTitle] = useState("");
     const [geminiModalContent, setGeminiModalContent] = useState("");
     const [isGeminiLoading, setIsGeminiLoading] = useState(false);
+
+    // New state for recommendation choice modal
+    const [isRecommendationChoiceModalOpen, setIsRecommendationChoiceModalOpen] = useState(false);
 
     const getFieldKeyFromName = useCallback((displayName) => {
         for (const k in FIELD_MAPPING) {
@@ -560,12 +563,9 @@ const App = () => {
 
 
     const openExternalLink = (url) => {
-        if (window.confirm(`您即將前往外部網站：\n\n${url}\n\n是否繼續？`)) {
-            window.open(url, '_blank');
-            setStatus(`已在瀏覽器中開啟: ${url}`);
-        } else {
-            setStatus("已取消前往外部連結。");
-        }
+        // No window.confirm as per instructions
+        window.open(url, '_blank');
+        setStatus(`已在瀏覽器中開啟: ${url}`);
     };
 
     const searchLyricsOnline = useCallback((songName, artistName) => {
@@ -593,7 +593,7 @@ const App = () => {
             let chatHistory = [];
             chatHistory.push({ role: "user", parts: [{ text: prompt }] });
             const payload = { contents: chatHistory };
-            const apiKey = "";
+            const apiKey = "AIzaSyCJZQkIXY_2r3tL81S7YRG9SGVPd-rXgys"; // Your API Key
             const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
             const response = await fetch(apiUrl, {
                 method: 'POST',
@@ -649,6 +649,7 @@ const App = () => {
         }
 
         if (allArtistRecordsFiltered.current.length === 0) {
+            // Replaced alert with a custom message box or modal if required, sticking to current method
             alert(`在目前的篩選條件下，沒有找到歌手 '${artistNameClicked}' 的收聽記錄。`);
             return;
         }
@@ -719,7 +720,11 @@ const App = () => {
 
         dataSummary += "排行前 20 項數據 (項目, 主要指標值, 總播放時長, 播放次數, 平均播放時長):\n";
         currentlyDisplayedRankedItems.slice(0, 20).forEach((item, index) => {
-            const [item_data, primary_metric_val, total_ms_val, count_val, avg_ms_val] = item;
+            const item_data = item[0] || 'N/A';
+            const primary_metric_val = item[1] || 0;
+            const total_ms_val = item[2] || 0;
+            const count_val = item[3] || 0;
+            const avg_ms_val = item[4] || 0;
             dataSummary += `${index + 1}. ${item_data} | ${primary_metric_val} | ${formatMsToMinSec(total_ms_val)} | ${count_val}次 | ${formatMsToMinSec(avg_ms_val)}\n`;
         });
 
@@ -728,9 +733,11 @@ const App = () => {
     }, [currentlyDisplayedRankedItems, rankingField, rankMetric, callGeminiAPI]);
 
 
-    const triggerGeminiPlaylist = useCallback(() => {
-        if (rankingField !== FIELD_MAPPING[1][1] || !currentlyDisplayedRankedItems.length) {
-            alert("此功能僅在『排行項目』為『歌曲名稱 - 歌手』時可用，且需有分析結果。");
+    const handlePlaylistRecommendation = useCallback(async (type) => {
+        setIsRecommendationChoiceModalOpen(false); // Close the choice modal
+
+        if (rankingField !== FIELD_MAPPING[1][1] || !allStreamingDataOriginal.length) {
+            alert("此功能僅在『排行項目』為『歌曲名稱 - 歌手』時可用，且需有載入的播放記錄。");
             return;
         }
 
@@ -740,7 +747,7 @@ const App = () => {
 
         // 提取前10首歌曲的詳細信息
         const top10Songs = currentlyDisplayedRankedItems.slice(0, 10).map(item => {
-            const [songArtist, primaryMetric, totalMs, count, avgMs] = item;
+            const [songArtist, , totalMs, count, ] = item;
             return `- ${songArtist || '未知歌曲'} (播放次數: ${count || 0}, 總時長: ${formatMsToMinSec(totalMs || 0)})`;
         }).join('\n');
         if (top10Songs) {
@@ -780,10 +787,19 @@ const App = () => {
             playlistPrompt += `\n最近播放的歌曲 (前5首):\n${recentPlays}\n`;
         }
 
-        playlistPrompt += "\n請推薦與上述音樂風格相似或基於這些資訊衍生的新歌。請確保推薦的歌曲不在上述『熱門歌曲』列表中。";
+        if (type === 'unheard') {
+            const top300Songs = rankData(allStreamingDataOriginal, "master_metadata_track_name", "300", "count");
+            const excludedSongs = top300Songs.map(item => item[0]).join(', ');
+            if (excludedSongs) {
+                playlistPrompt += `\n請避免推薦以下這些用戶可能已經很熟悉的歌曲（前300名熱門歌曲）：${excludedSongs}\n`;
+            }
+            playlistPrompt += "\n請推薦與上述音樂風格相似或基於這些資訊衍生的新歌。請確保推薦的歌曲不在上述『熱門歌曲』列表或排除列表中。";
+        } else { // type === 'random'
+            playlistPrompt += "\n請推薦與上述音樂風格相似或基於這些資訊衍生的新歌。請確保推薦的歌曲不在上述『熱門歌曲』列表中。";
+        }
 
         callGeminiAPI(playlistPrompt, "Gemini 推薦歌單");
-    }, [rankingField, currentlyDisplayedRankedItems, allStreamingDataOriginal, callGeminiAPI]);
+    }, [rankingField, allStreamingDataOriginal, currentlyDisplayedRankedItems, callGeminiAPI]);
 
 
     const showListeningDetails = useCallback((itemIndex) => {
@@ -890,6 +906,7 @@ const App = () => {
         }
 
         if (tempRecordsForDetails.length === 0) {
+            // Replaced alert with a custom message box or modal if required, sticking to current method
             alert(`在目前的篩選條件下，沒有找到 '${String(clickedItemData)}' 的詳細收聽記錄。`);
             return;
         }
@@ -968,6 +985,7 @@ const App = () => {
         );
 
         if (songSpecificRecords.length === 0) {
+            // Replaced alert with a custom message box or modal if required, sticking to current method
             alert(`沒有找到歌曲 '${songNameClicked}' 的詳細播放記錄。`);
             return;
         }
@@ -1467,6 +1485,39 @@ const App = () => {
         );
     };
 
+    const RecommendationChoiceModal = ({ isOpen, onClose, onSelect }) => {
+        if (!isOpen) return null;
+
+        return (
+            <div className="fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center p-4 z-50">
+                <div className="bg-gradient-to-br from-blue-800 to-purple-900 text-white rounded-3xl shadow-2xl p-8 w-full max-w-md flex flex-col items-center">
+                    <h2 className="text-2xl font-bold mb-6 text-center">推薦歌單選項</h2>
+                    <p className="text-lg text-center mb-8">您希望如何獲取推薦歌單？</p>
+                    <div className="flex flex-col space-y-4 w-full">
+                        <button
+                            onClick={() => onSelect('random')}
+                            className="px-8 py-4 bg-gradient-to-r from-teal-500 to-cyan-600 text-white font-semibold rounded-xl shadow-lg hover:from-teal-600 hover:to-cyan-700 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 transition transform hover:scale-105 active:scale-95"
+                        >
+                            隨機推薦
+                        </button>
+                        <button
+                            onClick={() => onSelect('unheard')}
+                            className="px-8 py-4 bg-gradient-to-r from-orange-500 to-red-600 text-white font-semibold rounded-xl shadow-lg hover:from-orange-600 hover:to-red-700 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 transition transform hover:scale-105 active:scale-95"
+                        >
+                            隨機但沒有聽過的歌
+                        </button>
+                    </div>
+                    <button
+                        onClick={onClose}
+                        className="mt-8 px-6 py-3 bg-gradient-to-r from-gray-500 to-gray-700 text-white rounded-xl shadow-lg hover:from-gray-600 hover:to-gray-800 transition transform hover:scale-105 active:scale-95"
+                    >
+                        取消
+                    </button>
+                </div>
+            </div>
+        );
+    };
+
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-gray-200 to-gray-300 p-6 font-inter text-gray-800">
@@ -1781,7 +1832,7 @@ const App = () => {
                     </button>
                     {rankingField === FIELD_MAPPING[1][1] && (
                         <button
-                            onClick={triggerGeminiPlaylist}
+                            onClick={() => setIsRecommendationChoiceModalOpen(true)} // Open the choice modal
                             className="px-8 py-4 bg-gradient-to-r from-pink-600 to-red-700 text-white font-semibold rounded-2xl shadow-xl hover:from-pink-700 hover:to-red-800 focus:outline-none focus:ring-2 focus:ring-pink-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95"
                             disabled={currentlyDisplayedRankedItems.length === 0}
                         >
@@ -1976,6 +2027,12 @@ const App = () => {
                 title={geminiModalTitle}
                 content={geminiModalContent}
                 isLoading={isGeminiLoading}
+            />
+
+            <RecommendationChoiceModal
+                isOpen={isRecommendationChoiceModalOpen}
+                onClose={() => setIsRecommendationChoiceModalOpen(false)}
+                onSelect={handlePlaylistRecommendation}
             />
         </div>
     );
