@@ -563,7 +563,6 @@ const App = () => {
 
 
     const openExternalLink = (url) => {
-        // No window.confirm as per instructions
         window.open(url, '_blank');
         setStatus(`已在瀏覽器中開啟: ${url}`);
     };
@@ -593,7 +592,10 @@ const App = () => {
             let chatHistory = [];
             chatHistory.push({ role: "user", parts: [{ text: prompt }] });
             const payload = { contents: chatHistory };
-            const apiKey = "AIzaSyCJZQkIXY_2r3tL81S7YRG9SGVPd-rXgys"; // Your API Key
+            // 將您的新且受限制的 Gemini API 金鑰放在這裡
+            // 重要：即使限制了金鑰，將其直接暴露在客戶端程式碼中仍有風險。
+            // 對於生產環境，更安全的做法是透過後端代理來呼叫 API。
+            const apiKey = "AIzaSyB4Wwf3gkNsySR6jugfRqiMEK5pt5JDXqs"; // <--- 請替換為您新生成的 API 金鑰
             const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
             const response = await fetch(apiUrl, {
                 method: 'POST',
@@ -649,7 +651,6 @@ const App = () => {
         }
 
         if (allArtistRecordsFiltered.current.length === 0) {
-            // Replaced alert with a custom message box or modal if required, sticking to current method
             alert(`在目前的篩選條件下，沒有找到歌手 '${artistNameClicked}' 的收聽記錄。`);
             return;
         }
@@ -891,7 +892,7 @@ const App = () => {
                         const endObj = dateFilterEnabled ? parseDateFromString(endDate) : null;
 
                         const start_date_normalized = startObj ? new Date(startObj.getFullYear(), startObj.getMonth(), startObj.getDate()) : null;
-                        const end_date_normalized = endObj ? new Date(endObj.getFullYear(), endObj.getMonth(), endObj.getDate()) : null; // Fixed typo end_obj
+                        const end_date_normalized = endObj ? new Date(endObj.getFullYear(), endObj.getMonth(), endObj.getDate()) : null;
                         const item_date_normalized = new Date(recordDate.getFullYear(), recordDate.getMonth(), recordDate.getDate());
 
                         if ((!start_date_normalized || item_date_normalized >= start_date_normalized) &&
@@ -906,7 +907,6 @@ const App = () => {
         }
 
         if (tempRecordsForDetails.length === 0) {
-            // Replaced alert with a custom message box or modal if required, sticking to current method
             alert(`在目前的篩選條件下，沒有找到 '${String(clickedItemData)}' 的詳細收聽記錄。`);
             return;
         }
@@ -985,7 +985,6 @@ const App = () => {
         );
 
         if (songSpecificRecords.length === 0) {
-            // Replaced alert with a custom message box or modal if required, sticking to current method
             alert(`沒有找到歌曲 '${songNameClicked}' 的詳細播放記錄。`);
             return;
         }
