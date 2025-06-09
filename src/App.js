@@ -263,6 +263,7 @@ const App = () => {
     const [progress, setProgress] = useState(0);
     const [status, setStatus] = useState("準備就緒");
 
+    // Main analyzer date filter states
     const [dateFilterEnabled, setDateFilterEnabled] = useState(false);
     const [startDate, setStartDate] = useState("");
     const [endDate, setEndDate] = useState("");
@@ -304,10 +305,14 @@ const App = () => {
     // New state for recommendation choice modal
     const [isRecommendationChoiceModalOpen, setIsRecommendationChoiceModalOpen] = useState(false);
 
-    // Recap State
+    // Recap States (獨立於主分析器)
     const [recapData, setRecapData] = useState(null);
     const [isRecapLoading, setIsRecapLoading] = useState(false);
-    const [isRecapDateSelectModalOpen, setIsRecapDateSelectModalOpen] = useState(false); // New state for Recap date selection modal
+    const [isRecapDateSelectModalOpen, setIsRecapDateSelectModalOpen] = useState(false);
+    const [recapStartDate, setRecapStartDate] = useState("");
+    const [recapEndDate, setRecapEndDate] = useState("");
+    const [recapApplyAllData, setRecapApplyAllData] = useState(false); // New state for "apply all data" in Recap
+
 
     // YouTube API Key (Hardcoded)
     const youtubeApiKey = "AIzaSyCAGNcELz80THkZrLa448pYpl0PzRraSfY";
@@ -408,7 +413,7 @@ const App = () => {
             setAllStreamingDataOriginal(currentStreamingData);
         }
 
-        // Date filtering
+        // Date filtering for main analyzer
         let currentStartDateObj = null;
         let currentEndDateObj = null;
         if (dateFilterEnabled) {
@@ -507,6 +512,9 @@ const App = () => {
         setTrendAnalysisType("無");
         setMainSearchTerm("");
         setRecapData(null); // Clear recap data on reset
+        setRecapStartDate(""); // Also reset recap states
+        setRecapEndDate("");
+        setRecapApplyAllData(false);
         // Reset search widgets state based on default ranking field
         setMainSearchEnabled(true); // Assuming '歌曲名稱 - 歌手' is default and supports search
         alert("應用程式狀態已重設。");
@@ -667,11 +675,15 @@ const App = () => {
             const result = await response.json();
 
             let extractedText = "";
+            let errorDetails = null;
+
             if (result.candidates && result.candidates.length > 0 &&
                 result.candidates[0].content && result.candidates[0].content.parts &&
                 result.candidates[0].content.parts.length > 0 &&
                 typeof result.candidates[0].content.parts[0].text === 'string') {
                 extractedText = result.candidates[0].content.parts[0].text;
+            } else if (result.error) {
+                errorDetails = result.error.message;
             }
 
             if (extractedText) { // Check if extractedText is not empty
@@ -696,7 +708,9 @@ const App = () => {
             } else {
                 // More detailed error message based on what might be missing
                 let errorMessage = "無法生成內容。";
-                if (!result.candidates || result.candidates.length === 0) {
+                if (errorDetails) {
+                    errorMessage += `API 錯誤訊息: ${errorDetails}`;
+                } else if (!result.candidates || result.candidates.length === 0) {
                     errorMessage += "API 響應中缺少 'candidates'。";
                 } else if (!result.candidates[0].content || !result.candidates[0].content.parts || result.candidates[0].content.parts.length === 0) {
                     errorMessage += "API 響應中缺少預期的內容結構。";
@@ -706,7 +720,7 @@ const App = () => {
                     errorMessage += "API 響應的 'text' 內容為空。";
                 }
                 setGeminiModalContent(errorMessage);
-                console.error("Gemini API 響應格式錯誤或內容缺失:", result);
+                console.error("Gemini API 響應錯誤或內容缺失:", result);
             }
         } catch (error) {
             setGeminiModalContent(`生成內容時發生錯誤: ${error.message}`);
@@ -731,6 +745,7 @@ const App = () => {
                         if (recordDateStr) {
                             try {
                                 const recordDate = new Date(recordDateStr.substring(0, 10));
+                                // Use main analyzer's date filter states
                                 const startObj = dateFilterEnabled ? parseDateFromString(startDate) : null;
                                 const endObj = dateFilterEnabled ? parseDateFromString(endDate) : null;
 
@@ -893,14 +908,11 @@ const App = () => {
         }
 
         if (type === 'unheard') {
-            const top300Songs = rankData(allStreamingDataOriginal, "master_metadata_track_name", "300", "count");
-            const excludedSongs = top300Songs.map(item => item[0]).join(', ');
-            if (excludedSongs) {
-                playlistPrompt += `\n請避免推薦以下這些用戶可能已經很熟悉的歌曲（前300名熱門歌曲）：${excludedSongs}\n`;
-            }
-            playlistPrompt += "\n請推薦與上述音樂風格相似或基於這些資訊衍生的新歌。請確保推薦的歌曲不在上述『熱門歌曲』列表或排除列表中。";
+            // Simplified prompt for unheard songs
+            playlistPrompt += `\n請避免推薦用戶已經非常熟悉的熱門歌曲 (基於其播放記錄的前300名最常播放歌曲的風格)。\n`;
+            playlistPrompt += "\n請推薦與上述音樂風格相似或基於這些資訊衍生的新歌。請確保推薦的歌曲是全新的聆聽體驗。";
         } else { // type === 'random'
-            playlistPrompt += "\n請推薦與上述音樂風格相似或基於這些資訊衍生的新歌。請確保推薦的歌曲不在上述『熱門歌曲』列表中。";
+            playlistPrompt += "\n請推薦與上述音樂風格相似或基於這些資訊衍生的新歌。";
         }
 
         callGeminiAPI(playlistPrompt, "Gemini 推薦歌單");
@@ -1006,7 +1018,7 @@ const App = () => {
                         const recordDate = new Date(recordDateStr.substring(0, 10)); //YYYY-MM-DD
                         
                         let shouldAddRecord = true;
-                        if (dateFilterEnabled) {
+                        if (dateFilterEnabled) { // Use main analyzer's date filter states
                             const startObj = parseDateFromString(startDate);
                             const endObj = parseDateFromString(endDate);
 
@@ -1334,7 +1346,7 @@ const App = () => {
     }, [rankingField, trendAnalysisType, getFieldKeyFromName]);
 
     // Recap Functionality - now triggered by RecapDateSelectModal
-    const handleRecapGeneration = useCallback(async (selectedStartDateStr, selectedEndDateStr, applyAllDataFlag) => {
+    const handleRecapGeneration = useCallback(async () => {
         setIsRecapDateSelectModalOpen(false); // Close the date selection modal
         
         if (allStreamingDataOriginal.length === 0) {
@@ -1349,9 +1361,9 @@ const App = () => {
         let periodSummary = "所有時間";
 
         // Apply date filter if not 'applyAllDataFlag'
-        if (!applyAllDataFlag) {
-            const currentStartDateObj = parseDateFromString(selectedStartDateStr);
-            const currentEndDateObj = parseDateFromString(selectedEndDateStr);
+        if (!recapApplyAllData) { // Use recap's independent state
+            const currentStartDateObj = parseDateFromString(recapStartDate); // Use recap's independent state
+            const currentEndDateObj = parseDateFromString(recapEndDate); // Use recap's independent state
 
             if (!currentStartDateObj || !currentEndDateObj || currentStartDateObj > currentEndDateObj) {
                 alert("請確保開始日期和結束日期格式正確且順序合理。");
@@ -1366,7 +1378,7 @@ const App = () => {
             }
             periodSummary = `${currentStartDateObj.toLocaleDateString()} 至 ${currentEndDateObj.toLocaleDateString()}`;
         }
-        // If applyAllDataFlag is true, dataToAnalyze remains allStreamingDataOriginal, and periodSummary remains "所有時間"
+        // If recapApplyAllData is true, dataToAnalyze remains allStreamingDataOriginal, and periodSummary remains "所有時間"
 
 
         // Aggregate data for Gemini
@@ -1412,21 +1424,21 @@ const App = () => {
         const sortedSongs = Array.from(songPlayCounts.entries())
             .sort((a, b) => b[1] - a[1])
             .slice(0, 5)
-            .map(([songArtist, count]) => ({ song: songArtist.split(' - ')[0], artist: songArtist.split(' - ')[1], count: count }));
+            .map(([songArtist, count], index) => ({ rank: index + 1, song: songArtist.split(' - ')[0], artist: songArtist.split(' - ')[1], count: count }));
 
         // Top Artists
         const sortedArtists = Array.from(artistPlayCounts.entries())
             .sort((a, b) => b[1] - a[1])
             .slice(0, 5)
-            .map(([artist, count]) => ({ name: artist, count: count }));
+            .map(([artist, count], index) => ({ rank: index + 1, name: artist, count: count }));
 
         // Prepare prompt for Gemini
         // Conditional handling for totalMinutesListenedCard
-        const totalMinutesCardValue = applyAllDataFlag ? "N/A" : Math.floor(totalMsPlayed / 60000).toLocaleString();
-        const totalMinutesCardUnit = applyAllDataFlag ? "" : "分鐘";
-        const totalMinutesCardSubText = applyAllDataFlag ? "此回顧針對所有可用資料，總收聽時長在此不顯示。" : "這是您在這段時間內收聽音樂的總時長。";
-        const biggestListeningDayMinutes = applyAllDataFlag ? "N/A" : Math.floor(maxDailyMs / 60000).toLocaleString();
-        const biggestListeningDayDate = applyAllDataFlag ? "N/A" : biggestListeningDay;
+        const totalMinutesCardValue = recapApplyAllData ? "N/A" : Math.floor(totalMsPlayed / 60000).toLocaleString();
+        const totalMinutesCardUnit = recapApplyAllData ? "" : "分鐘";
+        const totalMinutesCardSubText = recapApplyAllData ? "此回顧針對所有可用資料，總收聽時長在此不顯示。" : "這是您在這段時間內收聽音樂的總時長。";
+        const biggestListeningDayMinutes = recapApplyAllData ? "N/A" : Math.floor(maxDailyMs / 60000).toLocaleString();
+        const biggestListeningDayDate = recapApplyAllData ? "N/A" : biggestListeningDay;
 
 
         const prompt = `請根據以下 Spotify 播放記錄數據，為用戶生成一個音樂回顧（Recap）。請分析並總結用戶在該期間的音樂習慣、偏好和主要發現。請以繁體中文回應，並遵循以下 JSON 格式。請確保只輸出 JSON，不要有額外的文字或解釋。
@@ -1455,13 +1467,13 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
   "topSongsCard": {
     "title": "我的熱門歌曲",
     "songs": [
-      ${sortedSongs.map(s => `{ "rank": ${s.rank || 1}, "song": "${s.song}", "artist": "${s.artist}" }`).join(',\n      ')}
+      ${sortedSongs.map(s => `{ "rank": ${s.rank}, "song": "${s.song.replace(/"/g, '\\"')}", "artist": "${s.artist.replace(/"/g, '\\"')}" }`).join(',\n      ')}
     ]
   },
   "topArtistsCard": {
     "title": "我的熱門歌手",
     "artists": [
-      ${sortedArtists.map(a => `{ "rank": ${a.rank || 1}, "artist": "${a.name}" }`).join(',\n      ')}
+      ${sortedArtists.map(a => `{ "rank": ${a.rank}, "artist": "${a.name.replace(/"/g, '\\"')}" }`).join(',\n      ')}
     ]
   },
   "musicEvolutionCard": {
@@ -1486,6 +1498,7 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
 - songs 和 artists 列表請確保包含5項，如果數據不足則填寫 '未知'。
 - 確保所有文字都是繁體中文。
 - wordsToDescribeCard.words 應是 5 個描述性的詞彙。
+- 為了避免 JSON 格式錯誤，歌曲標題和藝術家名稱中的雙引號請進行轉義 (e.g., \")。
 `;
         const schema = {
             type: "OBJECT",
@@ -1579,7 +1592,7 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
 
         await callGeminiAPI(prompt, "您的音樂回顧 (Recap)", true, schema);
         setIsRecapLoading(false); // Set loading to false after API call
-    }, [allStreamingDataOriginal, callGeminiAPI]);
+    }, [allStreamingDataOriginal, callGeminiAPI, recapApplyAllData, recapStartDate, recapEndDate]);
 
 
     // Detail Modal Component
@@ -1698,7 +1711,8 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
                         </div>
 
                         {/* YouTube MV and Details Table - Side-by-side on larger screens */}
-                        <div className="flex flex-col md:flex-row flex-grow overflow-hidden gap-4 sm:gap-6 mb-4">
+                        {/* Removed overflow-hidden from this container to prevent cropping of iframe content */}
+                        <div className="flex flex-col md:flex-row flex-grow gap-4 sm:gap-6 mb-4">
                             {/* YouTube MV Section */}
                             <div className="w-full md:w-1/2 flex flex-col">
                                 {youtubeLoading ? (
@@ -1995,7 +2009,7 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
     
                     <div className="flex space-x-4">
                         <button
-                            onClick={() => onConfirm(initialStartDate, initialEndDate, applyAllData)}
+                            onClick={onConfirm} // Call onConfirm directly which will use the recap states from the parent.
                             className="px-6 py-3 sm:px-8 sm:py-4 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-xl shadow-lg hover:from-green-600 hover:to-emerald-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition transform hover:scale-105 active:scale-95 text-base sm:text-lg"
                         >
                             確認
@@ -2325,6 +2339,10 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
                             alert("請先載入您的 Spotify 播放記錄檔案才能生成回顧。");
                             return;
                         }
+                        // Set recap modal initial states before opening
+                        setRecapStartDate(startDate); // Populate with current main analyzer dates
+                        setRecapEndDate(endDate);
+                        setRecapApplyAllData(false); // Default to not applying all data initially for Recap
                         setIsRecapDateSelectModalOpen(true); // Open the date selection modal
                     }}
                     className={`px-5 py-2 sm:px-6 sm:py-3 rounded-xl shadow-lg font-semibold transition transform hover:scale-105 active:scale-95 text-sm sm:text-base ${currentPage === 'recap' ? 'bg-gradient-to-r from-blue-600 to-indigo-700 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
@@ -2737,12 +2755,12 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
                 isOpen={isRecapDateSelectModalOpen}
                 onClose={() => setIsRecapDateSelectModalOpen(false)}
                 onConfirm={handleRecapGeneration}
-                initialStartDate={startDate} // Use existing startDate/endDate state for initial values
-                initialEndDate={endDate}
-                onStartDateChange={setStartDate}
-                onEndDateChange={setEndDate}
-                onApplyAllDataChange={setDateFilterEnabled} // Reuse dateFilterEnabled to control "apply all data" for Recap
-                applyAllData={dateFilterEnabled} // Use the same state
+                initialStartDate={recapStartDate} // Use new recap states
+                initialEndDate={recapEndDate}
+                onStartDateChange={setRecapStartDate}
+                onEndDateChange={setRecapEndDate}
+                onApplyAllDataChange={setRecapApplyAllData} // Use new recap states
+                applyAllData={recapApplyAllData} // Use new recap states
             />
 
             <DetailModal
