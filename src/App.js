@@ -204,7 +204,7 @@ const analyzeTrendData = (data_list, trend_type_display, numResultsEntryValue) =
         for (const month of sorted_months) {
             const monthly_ranked_songs = rankData(monthly_data.get(month), "master_metadata_track_name", String(num_top_items), "count");
             const top_songs_display = [];
-            for (const [item_data, , , count, ] of monthly_ranked_songs) {
+            for (const [item_data, , , count] of monthly_ranked_songs) {
                 const [song_name, artist_name] = item_data.split(' - ');
                 top_songs_display.push(`${song_name} (${artist_name}) - ${count}次`);
             }
@@ -215,7 +215,7 @@ const analyzeTrendData = (data_list, trend_type_display, numResultsEntryValue) =
         for (const month of sorted_months) {
             const monthly_ranked_artists = rankData(monthly_data.get(month), "master_metadata_album_artist_name", String(num_top_items), "count");
             const top_artists_display = [];
-            for (const [item_data, , , count, ] of monthly_ranked_artists) {
+            for (const [item_data, , , count] of monthly_ranked_artists) {
                 const artist_name = item_data;
                 top_artists_display.push(`${artist_name} - ${count}次`);
             }
@@ -253,6 +253,8 @@ const TREND_ANALYSIS_TYPES = {
 };
 
 const App = () => {
+    const [currentPage, setCurrentPage] = useState('analyzer'); // 'analyzer', 'how-to-use' or 'recap'
+
     const [filePaths, setFilePaths] = useState([]);
     const [allStreamingDataOriginal, setAllStreamingDataOriginal] = useState([]);
     const [rankedItemsCache, setRankedItemsCache] = useState([]);
@@ -283,12 +285,15 @@ const App = () => {
     const [detailModalTitle, setDetailModalTitle] = useState("");
     const [detailMaxPlayTimes, setDetailMaxPlayTimes] = useState({});
     const [detailSearchTerm, setDetailSearchTerm] = useState(""); // Search term for detail modal
+    const [youtubeVideoId, setYoutubeVideoId] = useState(null); // New state for YouTube video ID
+    const [youtubeLoading, setYoutubeLoading] = useState(false); // New state for YouTube loading
 
     const [isArtistModalOpen, setIsArtistModalOpen] = useState(false);
     const [artistName, setArtistName] = useState("");
     const [artistAlbumsData, setArtistAlbumsData] = useState([]);
     const [artistSongsData, setArtistSongsData] = useState([]);
     const allArtistRecordsFiltered = useRef([]); // To store all filtered records for the artist modal
+    const [isArtistLoading, setIsArtistLoading] = useState(false); // New state for artist modal loading
 
     // State for Gemini API response modal
     const [isGeminiModalOpen, setIsGeminiModalOpen] = useState(false);
@@ -298,6 +303,14 @@ const App = () => {
 
     // New state for recommendation choice modal
     const [isRecommendationChoiceModalOpen, setIsRecommendationChoiceModalOpen] = useState(false);
+
+    // Recap State
+    const [recapData, setRecapData] = useState(null);
+    const [isRecapLoading, setIsRecapLoading] = useState(false);
+    const [isRecapDateSelectModalOpen, setIsRecapDateSelectModalOpen] = useState(false); // New state for Recap date selection modal
+
+    // YouTube API Key State (Hardcoded)
+    const youtubeApiKey = "AIzaSyCAGNcELz80THkZrLa448pYpl0PzRraSfY";
 
     const getFieldKeyFromName = useCallback((displayName) => {
         for (const k in FIELD_MAPPING) {
@@ -319,6 +332,7 @@ const App = () => {
         setRankedItemsCache([]);
         setCurrentlyDisplayedRankedItems([]);
         setProgress(0);
+        setRecapData(null); // Clear recap data on new file selection
     };
 
     const loadAndCombineData = useCallback(async (files) => {
@@ -492,6 +506,7 @@ const App = () => {
         setRankMetric("count");
         setTrendAnalysisType("無");
         setMainSearchTerm("");
+        setRecapData(null); // Clear recap data on reset
         // Reset search widgets state based on default ranking field
         setMainSearchEnabled(true); // Assuming '歌曲名稱 - 歌手' is default and supports search
         alert("應用程式狀態已重設。");
@@ -581,8 +596,48 @@ const App = () => {
         openExternalLink(`https://www.google.com/search?q=${encodeURIComponent(artistName + " 維基百科")}`);
     }, []);
 
+    const searchYoutubeMV = useCallback(async (songName, artistName) => {
+        if (!youtubeApiKey) {
+            // This should not happen since the key is hardcoded now.
+            // But keep for robustness.
+            alert("YouTube API 金鑰缺失。請聯絡應用程式提供者。");
+            return null;
+        }
 
-    const callGeminiAPI = useCallback(async (prompt, title) => {
+        setYoutubeLoading(true);
+        setYoutubeVideoId(null); // Clear previous video
+
+        const query = `${songName} ${artistName} official MV`;
+        const YOUTUBE_API_URL = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&key=${youtubeApiKey}&maxResults=1`;
+
+        try {
+            const response = await fetch(YOUTUBE_API_URL);
+            const data = await response.json();
+
+            if (data.items && data.items.length > 0) {
+                const videoId = data.items[0].id.videoId;
+                setYoutubeVideoId(videoId);
+                setStatus(`找到並載入 MV: ${songName} by ${artistName}`);
+                return videoId;
+            } else {
+                setYoutubeVideoId(null);
+                // No alert here, handled by UI.
+                setStatus(`找不到 MV: ${songName} by ${artistName}`);
+                return null;
+            }
+        } catch (error) {
+            console.error("搜尋 YouTube MV 時發生錯誤:", error);
+            setYoutubeVideoId(null);
+            alert(`搜尋 YouTube MV 時發生錯誤：${error.message}`);
+            setStatus(`YouTube MV 搜尋錯誤: ${error.message}`);
+            return null;
+        } finally {
+            setYoutubeLoading(false);
+        }
+    }, [youtubeApiKey]);
+
+
+    const callGeminiAPI = useCallback(async (prompt, title, isStructured = false, schema = null) => {
         setIsGeminiLoading(true);
         setGeminiModalTitle(title);
         setGeminiModalContent("正在生成內容，請稍候...");
@@ -591,11 +646,18 @@ const App = () => {
         try {
             let chatHistory = [];
             chatHistory.push({ role: "user", parts: [{ text: prompt }] });
+            
             const payload = { contents: chatHistory };
-            // 將您的新且受限制的 Gemini API 金鑰放在這裡
-            // 重要：即使限制了金鑰，將其直接暴露在客戶端程式碼中仍有風險。
-            // 對於生產環境，更安全的做法是透過後端代理來呼叫 API。
-            const apiKey = "AIzaSyB4Wwf3gkNsySR6jugfRqiMEK5pt5JDXqs"; // <--- 請替換為您新生成的 API 金鑰
+            if (isStructured && schema) {
+                payload.generationConfig = {
+                    responseMimeType: "application/json",
+                    responseSchema: schema
+                };
+            }
+
+            // Canvas will automatically provide the API key at runtime if left as an empty string.
+            // DO NOT ADD any API key validation.
+            const apiKey = ""; 
             const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
             const response = await fetch(apiUrl, {
                 method: 'POST',
@@ -607,7 +669,23 @@ const App = () => {
             if (result.candidates && result.candidates.length > 0 &&
                 result.candidates[0].content && result.candidates[0].content.parts &&
                 result.candidates[0].content.parts.length > 0) {
-                const text = result.candidates[0].content.parts[0].text;
+                let text = result.candidates[0].content.parts[0].text;
+                if (isStructured) {
+                    try {
+                        const parsedJson = JSON.parse(text);
+                        // Store the parsed JSON if it's recap data
+                        if (title === "您的音樂回顧 (Recap)") {
+                            setRecapData(parsedJson);
+                            setIsGeminiModalOpen(false); // Close generic modal if recap data loaded
+                            setCurrentPage('recap'); // Switch to recap page
+                            return; // Exit as we're handling recap data specifically
+                        }
+                        text = JSON.stringify(parsedJson, null, 2); // Pretty print for other structured responses
+                    } catch (parseError) {
+                        console.error("解析 Gemini 結構化輸出時發生錯誤:", parseError);
+                        text = `解析錯誤：${parseError.message}\n原始輸出:\n${text}`;
+                    }
+                }
                 setGeminiModalContent(text);
             } else {
                 setGeminiModalContent("無法生成內容。可能是 API 響應格式不正確或內容缺失。");
@@ -621,91 +699,100 @@ const App = () => {
         }
     }, []);
 
-    // Moved up for initialization order
-    const showArtistHierarchyWindow = useCallback((artistNameClicked) => {
+    const showArtistHierarchyWindow = useCallback(async (artistNameClicked) => {
+        setIsArtistLoading(true); // 開始載入
         setArtistName(artistNameClicked);
-        allArtistRecordsFiltered.current = []; // Clear previous filtered records
+        allArtistRecordsFiltered.current = []; // 清除之前的過濾記錄
+        setIsArtistModalOpen(true); // 立即開啟模態視窗，顯示載入指示器
 
-        for (const record of allStreamingDataOriginal) {
-            if (record.master_metadata_album_artist_name === artistNameClicked) {
-                const recordDateStr = record.ts;
-                if (recordDateStr) {
-                    try {
-                        const recordDate = new Date(recordDateStr.substring(0, 10));
-                        const startObj = dateFilterEnabled ? parseDateFromString(startDate) : null;
-                        const endObj = dateFilterEnabled ? parseDateFromString(endDate) : null;
+        // 使用 setTimeout 讓 loading state 有時間更新，避免 UI 阻塞
+        setTimeout(() => {
+            try {
+                for (const record of allStreamingDataOriginal) {
+                    if (record.master_metadata_album_artist_name === artistNameClicked) {
+                        const recordDateStr = record.ts;
+                        if (recordDateStr) {
+                            try {
+                                const recordDate = new Date(recordDateStr.substring(0, 10));
+                                const startObj = dateFilterEnabled ? parseDateFromString(startDate) : null;
+                                const endObj = dateFilterEnabled ? parseDateFromString(endDate) : null;
 
-                        const start_date_normalized = startObj ? new Date(startObj.getFullYear(), startObj.getMonth(), startObj.getDate()) : null;
-                        const end_date_normalized = endObj ? new Date(endObj.getFullYear(), endObj.getMonth(), endObj.getDate()) : null;
-                        const item_date_normalized = new Date(recordDate.getFullYear(), recordDate.getMonth(), recordDate.getDate());
+                                const start_date_normalized = startObj ? new Date(startObj.getFullYear(), startObj.getMonth(), startObj.getDate()) : null;
+                                const end_date_normalized = endObj ? new Date(endObj.getFullYear(), endObj.getMonth(), endObj.getDate()) : null;
+                                const item_date_normalized = new Date(recordDate.getFullYear(), recordDate.getMonth(), recordDate.getDate());
 
-                        if ((!start_date_normalized || item_date_normalized >= start_date_normalized) &&
-                            (!end_date_normalized || item_date_normalized <= end_date_normalized)) {
-                            allArtistRecordsFiltered.current.push(record);
+                                if ((!start_date_normalized || item_date_normalized >= start_date_normalized) &&
+                                    (!end_date_normalized || item_date_normalized <= end_date_normalized)) {
+                                    allArtistRecordsFiltered.current.push(record);
+                                }
+                            } catch (e) {
+                                console.warn(`跳過歌手詳細中無效日期格式的記錄: ${recordDateStr}`, e);
+                            }
                         }
-                    } catch (e) {
-                        console.warn(`跳過歌手詳細中無效日期格式的記錄: ${recordDateStr}`, e);
                     }
                 }
+
+                if (allArtistRecordsFiltered.current.length === 0) {
+                    // 如果沒有數據，關閉模態視窗並提示
+                    setIsArtistModalOpen(false);
+                    alert(`在目前的篩選條件下，沒有找到歌手 '${artistNameClicked}' 的收聽記錄。`);
+                    return;
+                }
+
+                // Prepare album data
+                const albumsDataMap = new Map(); // Key: albumName, Value: {count, total_ms, songs: Map<songName, {count, total_ms}>}
+                const allSongsByArtistDataMap = new Map(); // Key: songName, Value: {count, total_ms, album: albumName}
+
+                for (const record of allArtistRecordsFiltered.current) {
+                    const albumName = record.master_metadata_album_album_name || "未知專輯";
+                    const songName = record.master_metadata_track_name || "未知歌曲";
+                    const msPlayed = getMsFromRecord(record.ms_played);
+
+                    if (!albumsDataMap.has(albumName)) {
+                        albumsDataMap.set(albumName, { count: 0, total_ms: 0, songs: new Map() });
+                    }
+                    const albumMetrics = albumsDataMap.get(albumName);
+                    albumMetrics.count += 1;
+                    albumMetrics.total_ms += msPlayed;
+
+                    if (!albumMetrics.songs.has(songName)) {
+                        albumMetrics.songs.set(songName, { count: 0, total_ms: 0 });
+                    }
+                    const songMetricsInAlbum = albumMetrics.songs.get(songName);
+                    songMetricsInAlbum.count += 1;
+                    songMetricsInAlbum.total_ms += msPlayed;
+
+                    if (!allSongsByArtistDataMap.has(songName)) {
+                        allSongsByArtistDataMap.set(songName, { count: 0, total_ms: 0, album: "未知專輯" });
+                    }
+                    const songMetricsOverall = allSongsByArtistDataMap.get(songName);
+                    songMetricsOverall.count += 1;
+                    songMetricsOverall.total_ms += msPlayed;
+                    if (songMetricsOverall.album === "未知專輯") { // Set album only if not set yet
+                        songMetricsOverall.album = albumName;
+                    }
+                }
+
+                const sortedAlbums = Array.from(albumsDataMap.entries()).sort((a, b) => b[1].count - a[1].count);
+                setArtistAlbumsData(sortedAlbums.map(([albumName, data]) => ({
+                    albumName,
+                    count: data.count,
+                    totalDuration: formatMsToMinSec(data.total_ms),
+                    rawSongsData: data.songs // Store raw map for later use
+                })));
+
+                const sortedSongsOverall = Array.from(allSongsByArtistDataMap.entries()).sort((a, b) => b[1].count - a[1].count);
+                setArtistSongsData(sortedSongsOverall.map(([songName, data]) => ({
+                    songName,
+                    albumName: data.album,
+                    count: data.count,
+                    totalDuration: formatMsToMinSec(data.total_ms)
+                })));
+
+            } finally {
+                setIsArtistLoading(false); // 結束載入
             }
-        }
-
-        if (allArtistRecordsFiltered.current.length === 0) {
-            alert(`在目前的篩選條件下，沒有找到歌手 '${artistNameClicked}' 的收聽記錄。`);
-            return;
-        }
-
-        // Prepare album data
-        const albumsDataMap = new Map(); // Key: albumName, Value: {count, total_ms, songs: Map<songName, {count, total_ms}>}
-        const allSongsByArtistDataMap = new Map(); // Key: songName, Value: {count, total_ms, album: albumName}
-
-        for (const record of allArtistRecordsFiltered.current) {
-            const albumName = record.master_metadata_album_album_name || "未知專輯";
-            const songName = record.master_metadata_track_name || "未知歌曲";
-            const msPlayed = getMsFromRecord(record.ms_played);
-
-            if (!albumsDataMap.has(albumName)) {
-                albumsDataMap.set(albumName, { count: 0, total_ms: 0, songs: new Map() });
-            }
-            const albumMetrics = albumsDataMap.get(albumName);
-            albumMetrics.count += 1;
-            albumMetrics.total_ms += msPlayed;
-
-            if (!albumMetrics.songs.has(songName)) {
-                albumMetrics.songs.set(songName, { count: 0, total_ms: 0 });
-            }
-            const songMetricsInAlbum = albumMetrics.songs.get(songName);
-            songMetricsInAlbum.count += 1;
-            songMetricsInAlbum.total_ms += msPlayed;
-
-            if (!allSongsByArtistDataMap.has(songName)) {
-                allSongsByArtistDataMap.set(songName, { count: 0, total_ms: 0, album: "未知專輯" });
-            }
-            const songMetricsOverall = allSongsByArtistDataMap.get(songName);
-            songMetricsOverall.count += 1;
-            songMetricsOverall.total_ms += msPlayed;
-            if (songMetricsOverall.album === "未知專輯") { // Set album only if not set yet
-                songMetricsOverall.album = albumName;
-            }
-        }
-
-        const sortedAlbums = Array.from(albumsDataMap.entries()).sort((a, b) => b[1].count - a[1].count);
-        setArtistAlbumsData(sortedAlbums.map(([albumName, data]) => ({
-            albumName,
-            count: data.count,
-            totalDuration: formatMsToMinSec(data.total_ms),
-            rawSongsData: data.songs // Store raw map for later use
-        })));
-
-        const sortedSongsOverall = Array.from(allSongsByArtistDataMap.entries()).sort((a, b) => b[1].count - a[1].count);
-        setArtistSongsData(sortedSongsOverall.map(([songName, data]) => ({
-            songName,
-            albumName: data.album,
-            count: data.count,
-            totalDuration: formatMsToMinSec(data.total_ms)
-        })));
-
-        setIsArtistModalOpen(true);
+        }, 10); // 短暫延遲以允許 UI 更新 loading state
     }, [allStreamingDataOriginal, dateFilterEnabled, startDate, endDate]);
 
 
@@ -803,7 +890,7 @@ const App = () => {
     }, [rankingField, allStreamingDataOriginal, currentlyDisplayedRankedItems, callGeminiAPI]);
 
 
-    const showListeningDetails = useCallback((itemIndex) => {
+    const showListeningDetails = useCallback(async (itemIndex) => {
         if (!allStreamingDataOriginal.length) {
             return;
         }
@@ -820,6 +907,10 @@ const App = () => {
         const clickedItemTuple = currentlyDisplayedRankedItems[itemIndex];
         const clickedItemData = clickedItemTuple[0]; // (item_data, primary_metric, total_ms, count, avg_ms)
 
+        // Reset YouTube video
+        setYoutubeVideoId(null);
+        setYoutubeLoading(false);
+
         // Handle artist hierarchy
         if (currentFieldToRankKey === "master_metadata_album_artist_name") {
             const artistNameClicked = String(clickedItemData);
@@ -828,6 +919,9 @@ const App = () => {
         }
 
         const tempRecordsForDetails = [];
+        let songNameForMV = '';
+        let artistNameForMV = '';
+
         for (const record of allStreamingDataOriginal) {
             let isMatch = false;
             if (currentFieldToRankKey === "spotify_track_uri") {
@@ -853,10 +947,15 @@ const App = () => {
                     if (record.master_metadata_track_name === trackToFind &&
                         record.master_metadata_album_artist_name === artistToFind) {
                         isMatch = true;
+                        songNameForMV = trackToFind;
+                        artistNameForMV = artistToFind;
                     }
                 } else { // Handle URI case for ms_played ranking if clickedItemData is a URI
                     if (record.spotify_track_uri === clickedItemData) {
                         isMatch = true;
+                        // Try to get song/artist from the record itself if URI is the clicked item
+                        songNameForMV = record.master_metadata_track_name || '';
+                        artistNameForMV = record.master_metadata_album_artist_name || '';
                     }
                 }
             } else if (currentFieldToRankKey === "platform") {
@@ -891,8 +990,8 @@ const App = () => {
                         const startObj = dateFilterEnabled ? parseDateFromString(startDate) : null;
                         const endObj = dateFilterEnabled ? parseDateFromString(endDate) : null;
 
-                        const start_date_normalized = startObj ? new Date(startObj.getFullYear(), startObj.getMonth(), startObj.getDate()) : null;
-                        const end_date_normalized = endObj ? new Date(endObj.getFullYear(), endObj.getMonth(), endObj.getDate()) : null;
+                        const start_date_normalized = new Date(startObj.getFullYear(), startObj.getMonth(), startObj.getDate());
+                        const end_date_normalized = new Date(endObj.getFullYear(), endObj.getMonth(), endObj.getDate());
                         const item_date_normalized = new Date(recordDate.getFullYear(), recordDate.getMonth(), recordDate.getDate());
 
                         if ((!start_date_normalized || item_date_normalized >= start_date_normalized) &&
@@ -962,7 +1061,13 @@ const App = () => {
         setDetailMaxPlayTimes(maxPlayTimesForDetails);
         setDetailSearchTerm(""); // Clear search when opening new modal
         setIsDetailModalOpen(true);
-    }, [allStreamingDataOriginal, currentlyDisplayedRankedItems, currentFieldToRankKey, dateFilterEnabled, startDate, endDate, trendAnalysisType, showArtistHierarchyWindow]);
+
+        // Immediately search for MV if it's a song/track URI
+        if (songNameForMV && artistNameForMV && (currentFieldToRankKey === "master_metadata_track_name" || currentFieldToRankKey === "ms_played" || currentFieldToRankKey === "spotify_track_uri")) {
+            searchYoutubeMV(songNameForMV, artistNameForMV);
+        }
+
+    }, [allStreamingDataOriginal, currentlyDisplayedRankedItems, currentFieldToRankKey, dateFilterEnabled, startDate, endDate, trendAnalysisType, showArtistHierarchyWindow, searchYoutubeMV]);
 
 
     const handleArtistAlbumSelect = useCallback((albumName) => {
@@ -978,7 +1083,7 @@ const App = () => {
         }
     }, [artistAlbumsData]);
 
-    const handleArtistSongDoubleClick = useCallback((songNameClicked, /* albumNameContext */) => {
+    const handleArtistSongDoubleClick = useCallback(async (songNameClicked, /* albumNameContext */) => {
         const songSpecificRecords = allArtistRecordsFiltered.current.filter(record =>
             record.master_metadata_track_name === songNameClicked &&
             record.master_metadata_album_artist_name === artistName // Use the current artistName from state
@@ -1004,7 +1109,11 @@ const App = () => {
         setDetailMaxPlayTimes(maxPlayTimesForSong);
         setDetailSearchTerm("");
         setIsDetailModalOpen(true);
-    }, [artistName]); // artistName is from the parent modal state
+
+        // Search MV when double-clicking a song in artist modal
+        await searchYoutubeMV(songNameClicked, artistName);
+
+    }, [artistName, searchYoutubeMV]); // artistName is from the parent modal state
 
 
     const exportToCsv = useCallback(() => {
@@ -1194,9 +1303,257 @@ const App = () => {
         setMainSearchEnabled(shouldEnableSearch);
     }, [rankingField, trendAnalysisType, getFieldKeyFromName]);
 
+    // Recap Functionality - now triggered by RecapDateSelectModal
+    const handleRecapGeneration = useCallback(async (selectedStartDateStr, selectedEndDateStr, applyAllDataFlag) => {
+        setIsRecapDateSelectModalOpen(false); // Close the date selection modal
+        
+        if (allStreamingDataOriginal.length === 0) {
+            alert("請先載入您的 Spotify 播放記錄檔案才能生成回顧。");
+            return;
+        }
+
+        setIsRecapLoading(true);
+        setRecapData(null); // Clear previous recap data
+
+        let dataToAnalyze = allStreamingDataOriginal;
+        let periodSummary = "所有時間";
+
+        // Apply date filter if not 'applyAllDataFlag'
+        if (!applyAllDataFlag) {
+            const currentStartDateObj = parseDateFromString(selectedStartDateStr);
+            const currentEndDateObj = parseDateFromString(selectedEndDateStr);
+
+            if (!currentStartDateObj || !currentEndDateObj || currentStartDateObj > currentEndDateObj) {
+                alert("請確保開始日期和結束日期格式正確且順序合理。");
+                setIsRecapLoading(false);
+                return;
+            }
+            dataToAnalyze = filterDataByDate(allStreamingDataOriginal, currentStartDateObj, currentEndDateObj);
+            if (dataToAnalyze.length === 0) {
+                alert("在指定的日期範圍內沒有找到播放記錄，無法生成回顧。");
+                setIsRecapLoading(false);
+                return;
+            }
+            periodSummary = `${currentStartDateObj.toLocaleDateString()} 至 ${currentEndDateObj.toLocaleDateString()}`;
+        }
+        // If applyAllDataFlag is true, dataToAnalyze remains allStreamingDataOriginal, and periodSummary remains "所有時間"
+
+
+        // Aggregate data for Gemini
+        let totalMsPlayed = 0;
+        const dailyMsPlayed = new Map(); // Date -> total ms
+        const songPlayCounts = new Map(); // "Song - Artist" -> count
+        const artistPlayCounts = new Map(); // "Artist" -> count
+        // const albumPlayCounts = new Map(); // "Album - Artist" -> count // Not used in recap, can remove
+
+        for (const record of dataToAnalyze) {
+            const ms = getMsFromRecord(record.ms_played || 0);
+            totalMsPlayed += ms;
+
+            // Daily Stats
+            const dateOnly = record.ts ? record.ts.substring(0, 10) : 'N/A';
+            dailyMsPlayed.set(dateOnly, (dailyMsPlayed.get(dateOnly) || 0) + ms);
+
+            // Song, Artist, Album counts
+            const songName = record.master_metadata_track_name || '未知歌曲';
+            const artistName = record.master_metadata_album_artist_name || '未知歌手';
+            // const albumName = record.master_metadata_album_album_name || '未知專輯'; // Not used in recap, can remove
+
+            const songKey = `${songName} - ${artistName}`;
+            songPlayCounts.set(songKey, (songPlayCounts.get(songKey) || 0) + 1);
+
+            artistPlayCounts.set(artistName, (artistPlayCounts.get(artistName) || 0) + 1);
+
+            // const albumKey = `${albumName} - ${artistName}`; // Not used in recap, can remove
+            // albumPlayCounts.set(albumKey, (albumPlayCounts.get(albumKey) || 0) + 1); // Not used in recap, can remove
+        }
+
+        // Find biggest listening day
+        let biggestListeningDay = 'N/A';
+        let maxDailyMs = 0;
+        for (const [date, ms] of dailyMsPlayed.entries()) {
+            if (ms > maxDailyMs) {
+                maxDailyMs = ms;
+                biggestListeningDay = date;
+            }
+        }
+
+        // Top Songs
+        const sortedSongs = Array.from(songPlayCounts.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5)
+            .map(([songArtist, count]) => ({ song: songArtist.split(' - ')[0], artist: songArtist.split(' - ')[1], count: count }));
+
+        // Top Artists
+        const sortedArtists = Array.from(artistPlayCounts.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5)
+            .map(([artist, count]) => ({ name: artist, count: count }));
+
+        // Prepare prompt for Gemini
+        // Conditional handling for totalMinutesListenedCard
+        const totalMinutesCardValue = applyAllDataFlag ? "N/A" : Math.floor(totalMsPlayed / 60000).toLocaleString();
+        const totalMinutesCardUnit = applyAllDataFlag ? "" : "分鐘";
+        const totalMinutesCardSubText = applyAllDataFlag ? "此回顧針對所有可用資料，總收聽時長在此不顯示。" : "這是您在這段時間內收聽音樂的總時長。";
+        const biggestListeningDayMinutes = applyAllDataFlag ? "N/A" : Math.floor(maxDailyMs / 60000).toLocaleString();
+        const biggestListeningDayDate = applyAllDataFlag ? "N/A" : biggestListeningDay;
+
+
+        const prompt = `請根據以下 Spotify 播放記錄數據，為用戶生成一個音樂回顧（Recap）。請分析並總結用戶在該期間的音樂習慣、偏好和主要發現。請以繁體中文回應，並遵循以下 JSON 格式。請確保只輸出 JSON，不要有額外的文字或解釋。
+數據摘要：
+- 分析期間: ${periodSummary}
+- 總收聽時長: ${formatMsToMinSec(totalMsPlayed)} (${totalMsPlayed} 毫秒)
+- 最高收聽日: ${biggestListeningDay} (播放時長: ${formatMsToMinSec(maxDailyMs)} / ${maxDailyMs} 毫秒)
+- 熱門歌曲 (前5名，歌曲名稱 - 歌手，播放次數)：
+${sortedSongs.map(s => `- ${s.song} - ${s.artist} (${s.count} 次)`).join('\n')}
+- 熱門歌手 (前5名，歌手名稱，播放次數)：
+${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
+
+請根據這些數據生成以下 JSON 結構：
+{
+  "recapTitle": "${periodSummary} 音樂回顧",
+  "totalMinutesListenedCard": {
+    "title": "我的總收聽時長",
+    "value": "${totalMinutesCardValue}",
+    "unit": "${totalMinutesCardUnit}",
+    "subText": "${totalMinutesCardSubText}",
+    "biggestListeningDay": {
+      "date": "${biggestListeningDayDate}",
+      "minutes": "${biggestListeningDayMinutes}"
+    }
+  },
+  "topSongsCard": {
+    "title": "我的熱門歌曲",
+    "songs": [
+      ${sortedSongs.map(s => `{ "rank": ${s.rank || 1}, "song": "${s.song}", "artist": "${s.artist}" }`).join(',\n      ')}
+    ]
+  },
+  "topArtistsCard": {
+    "title": "我的熱門歌手",
+    "artists": [
+      ${sortedArtists.map(a => `{ "rank": ${a.rank || 1}, "artist": "${a.name}" }`).join(',\n      ')}
+    ]
+  },
+  "musicEvolutionCard": {
+    "title": "我的音樂進化",
+    "description": "[Gemini AI 根據熱門歌曲/歌手和播放趨勢，總結用戶音樂品味的演變。內容應具洞察力，約50-80字。]"
+  },
+  "wordsToDescribeCard": {
+    "title": "描述我的音樂風格",
+    "words": [
+      "[詞彙1]",
+      "[詞彙2]",
+      "[詞彙3]",
+      "[詞彙4]",
+      "[詞彙5]"
+    ],
+    "description": "[簡要解釋這些詞彙如何描述用戶的音樂風格，約20-30字。]"
+  }
+}
+請根據提供的數據填充上述 JSON 結構。特別注意：
+- totalMinutesListenedCard.value 請使用格式化後的分鐘數 (XX,XXX) 或 'N/A'。
+- biggestListeningDay 的日期請使用YYYYMMDD 格式或 'N/A'。
+- songs 和 artists 列表請確保包含5項，如果數據不足則填寫 '未知'。
+- 確保所有文字都是繁體中文。
+- wordsToDescribeCard.words 應是 5 個描述性的詞彙。
+`;
+        const schema = {
+            type: "OBJECT",
+            properties: {
+                recapTitle: { type: "STRING" },
+                totalMinutesListenedCard: {
+                    type: "OBJECT",
+                    properties: {
+                        title: { type: "STRING" },
+                        value: { type: "STRING" },
+                        unit: { type: "STRING" },
+                        subText: { type: "STRING" },
+                        biggestListeningDay: {
+                            type: "OBJECT",
+                            properties: {
+                                date: { type: "STRING" },
+                                minutes: { type: "STRING" }
+                            },
+                            propertyOrdering: ["date", "minutes"]
+                        }
+                    },
+                    propertyOrdering: ["title", "value", "unit", "subText", "biggestListeningDay"]
+                },
+                topSongsCard: {
+                    type: "OBJECT",
+                    properties: {
+                        title: { type: "STRING" },
+                        songs: {
+                            type: "ARRAY",
+                            items: {
+                                type: "OBJECT",
+                                properties: {
+                                    rank: { type: "NUMBER" },
+                                    song: { type: "STRING" },
+                                    artist: { type: "STRING" }
+                                },
+                                propertyOrdering: ["rank", "song", "artist"]
+                            }
+                        }
+                    },
+                    propertyOrdering: ["title", "songs"]
+                },
+                topArtistsCard: {
+                    type: "OBJECT",
+                    properties: {
+                        title: { type: "STRING" },
+                        artists: {
+                            type: "ARRAY",
+                            items: {
+                                type: "OBJECT",
+                                properties: {
+                                    rank: { type: "NUMBER" },
+                                    artist: { type: "STRING" }
+                                },
+                                propertyOrdering: ["rank", "artist"]
+                            }
+                        }
+                    },
+                    propertyOrdering: ["title", "artists"]
+                },
+                musicEvolutionCard: {
+                    type: "OBJECT",
+                    properties: {
+                        title: { type: "STRING" },
+                        description: { type: "STRING" }
+                    },
+                    propertyOrdering: ["title", "description"]
+                },
+                wordsToDescribeCard: {
+                    type: "OBJECT",
+                    properties: {
+                        title: { type: "STRING" },
+                        words: {
+                            type: "ARRAY",
+                            items: { type: "STRING" }
+                        },
+                        description: { type: "STRING" }
+                    },
+                    propertyOrdering: ["title", "words", "description"]
+                }
+            },
+            propertyOrdering: [
+                "recapTitle",
+                "totalMinutesListenedCard",
+                "topSongsCard",
+                "topArtistsCard",
+                "musicEvolutionCard",
+                "wordsToDescribeCard"
+            ]
+        };
+
+        await callGeminiAPI(prompt, "您的音樂回顧 (Recap)", true, schema);
+        setIsRecapLoading(false); // Set loading to false after API call
+    }, [allStreamingDataOriginal, callGeminiAPI]);
+
 
     // Detail Modal Component
-    const DetailModal = ({ isOpen, onClose, records, title, maxPlayTimes, searchTerm, onSearchChange, onSearch, onClearSearch, onExport, searchLyricsOnline, searchAlbumReviewOnline, searchArtistBioOnline, onSongInsight }) => {
+    const DetailModal = ({ isOpen, onClose, records, title, maxPlayTimes, searchTerm, onSearchChange, onSearch, onClearSearch, onExport, searchLyricsOnline, searchAlbumReviewOnline, searchArtistBioOnline, onSongInsight, youtubeVideoId, youtubeLoading }) => {
         // Ensure useMemo is always called when DetailModal is rendered
         const filteredRecords = useMemo(() => {
             // Only perform filtering if the modal is logically open and a search term exists
@@ -1233,7 +1590,7 @@ const App = () => {
         return (
             <div ref={detailModalRef} className={`fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center p-4 z-50 transition-opacity duration-300 ${isOpen ? 'opacity-100 visible' : 'opacity-0 invisible'}`}>
                 {isOpen && ( // Conditionally render inner content only if modal is open
-                    <div className="bg-gradient-to-br from-purple-800 to-indigo-900 text-white rounded-3xl shadow-2xl p-8 w-full max-w-5xl max-h-[95vh] flex flex-col transform scale-95 opacity-0 animate-fade-in-up">
+                    <div className="bg-gradient-to-br from-purple-800 to-indigo-900 text-white rounded-xl sm:rounded-3xl shadow-2xl p-4 sm:p-8 w-full max-w-full sm:max-w-3xl md:max-w-4xl lg:max-w-5xl max-h-[95vh] flex flex-col transform scale-95 opacity-0 animate-fade-in-up">
                         <style>{`
                             @keyframes fade-in-up {
                                 from { opacity: 0; transform: translateY(20px) scale(0.95); }
@@ -1243,43 +1600,43 @@ const App = () => {
                                 animation: fade-in-up 0.3s ease-out forwards;
                             }
                         `}</style>
-                        <h2 className="text-3xl font-bold mb-6 text-center drop-shadow-md">{title}</h2>
+                        <h2 className="text-xl sm:text-3xl font-bold mb-4 sm:mb-6 text-center drop-shadow-md">{title}</h2>
 
-                        <div className="flex flex-wrap items-center space-x-2 mb-6 bg-gray-800 p-4 rounded-xl shadow-inner">
-                            <label htmlFor="detailSearch" className="text-gray-200 text-lg font-medium">搜尋詳細記錄:</label>
+                        <div className="flex flex-col sm:flex-row items-center space-y-2 sm:space-y-0 sm:space-x-2 mb-4 sm:mb-6 bg-gray-800 p-3 sm:p-4 rounded-lg sm:rounded-xl shadow-inner">
+                            <label htmlFor="detailSearch" className="text-gray-200 text-base sm:text-lg font-medium">搜尋詳細記錄:</label>
                             <input
                                 id="detailSearch"
                                 type="text"
-                                className="flex-grow p-3 border border-gray-600 rounded-lg bg-gray-700 text-white placeholder-gray-400 focus:ring-blue-500 focus:border-blue-500 focus:ring-2 transition duration-200"
+                                className="flex-grow p-2 sm:p-3 border border-gray-600 rounded-lg bg-gray-700 text-white placeholder-gray-400 focus:ring-blue-500 focus:border-blue-500 focus:ring-2 transition duration-200 text-sm sm:text-base"
                                 value={searchTerm}
                                 onChange={(e) => onSearchChange(e.target.value)}
                                 placeholder="搜尋..."
                             />
                             <button
                                 onClick={onSearch}
-                                className="px-6 py-3 bg-gradient-to-r from-blue-500 to-blue-700 text-white rounded-xl shadow-lg hover:from-blue-600 hover:to-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
+                                className="px-4 py-2 sm:px-6 sm:py-3 bg-gradient-to-r from-blue-500 to-blue-700 text-white rounded-lg sm:rounded-xl shadow-lg hover:from-blue-600 hover:to-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95 text-sm sm:text-base"
                             >
                                 搜尋
                             </button>
                             <button
                                 onClick={onClearSearch}
-                                className="px-6 py-3 bg-gradient-to-r from-gray-400 to-gray-600 text-gray-900 rounded-xl shadow-lg hover:from-gray-500 hover:to-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
+                                className="px-4 py-2 sm:px-6 sm:py-3 bg-gradient-to-r from-gray-400 to-gray-600 text-gray-900 rounded-lg sm:rounded-xl shadow-lg hover:from-gray-500 hover:to-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95 text-sm sm:text-base"
                             >
                                 清除
                             </button>
                             <button
                                 onClick={onExport}
-                                className="px-6 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl shadow-lg hover:from-green-600 hover:to-emerald-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95 ml-auto"
+                                className="px-4 py-2 sm:px-6 sm:py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-lg sm:rounded-xl shadow-lg hover:from-green-600 hover:to-emerald-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95 ml-auto text-sm sm:text-base"
                             >
                                 匯出 CSV
                             </button>
                         </div>
 
-                        <div className="flex flex-wrap gap-3 mb-6 justify-center">
+                        <div className="flex flex-wrap gap-2 sm:gap-3 mb-4 sm:mb-6 justify-center">
                             {item_name_for_web_search && artist_name_for_web_search && (
                                 <button
                                     onClick={() => searchLyricsOnline(item_name_for_web_search, artist_name_for_web_search)}
-                                    className="px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-600 text-white text-md rounded-lg shadow-md hover:from-purple-600 hover:to-pink-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
+                                    className="px-3 py-2 sm:px-4 sm:py-2 bg-gradient-to-r from-purple-500 to-pink-600 text-white text-xs sm:text-md rounded-lg shadow-md hover:from-purple-600 hover:to-pink-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
                                 >
                                     Google 搜尋歌詞
                                 </button>
@@ -1287,7 +1644,7 @@ const App = () => {
                             {album_name_for_web_search && artist_name_for_web_search && (
                                 <button
                                     onClick={() => searchAlbumReviewOnline(album_name_for_web_search, artist_name_for_web_search)}
-                                    className="px-4 py-2 bg-gradient-to-r from-orange-500 to-red-600 text-white text-md rounded-lg shadow-md hover:from-orange-600 hover:to-red-700 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
+                                    className="px-3 py-2 sm:px-4 sm:py-2 bg-gradient-to-r from-orange-500 to-red-600 text-white text-xs sm:text-md rounded-lg shadow-md hover:from-orange-600 hover:to-red-700 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
                                 >
                                     Google 搜尋專輯評價
                                 </button>
@@ -1295,7 +1652,7 @@ const App = () => {
                             {artist_name_for_web_search && ( 
                                 <button
                                     onClick={() => searchArtistBioOnline(artist_name_for_web_search)}
-                                    className="px-4 py-2 bg-gradient-to-r from-teal-500 to-cyan-600 text-white text-md rounded-lg shadow-md hover:from-teal-600 hover:to-cyan-700 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
+                                    className="px-3 py-2 sm:px-4 sm:py-2 bg-gradient-to-r from-teal-500 to-cyan-600 text-white text-xs sm:text-md rounded-lg shadow-md hover:from-teal-600 hover:to-cyan-700 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
                                 >
                                     Google 搜尋藝術家簡介
                                 </button>
@@ -1303,20 +1660,49 @@ const App = () => {
                             {item_name_for_web_search && artist_name_for_web_search && (
                                 <button
                                     onClick={() => onSongInsight(item_name_for_web_search, artist_name_for_web_search)}
-                                    className="px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white text-md rounded-lg shadow-md hover:from-blue-600 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
+                                    className="px-3 py-2 sm:px-4 sm:py-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white text-xs sm:text-md rounded-lg shadow-md hover:from-blue-600 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
                                 >
                                     ✨ 歌曲洞察
                                 </button>
                             )}
                         </div>
 
-                        <div className="flex-grow overflow-auto border border-gray-600 rounded-xl shadow-inner">
+                        {/* YouTube MV Section */}
+                        {youtubeLoading ? (
+                            <div className="flex justify-center items-center h-24 my-4 bg-gray-800 rounded-lg">
+                                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+                                <span className="ml-3 text-lg text-gray-300">載入 MV 中...</span>
+                            </div>
+                        ) : youtubeVideoId ? (
+                            <div className="flex flex-col items-center my-4">
+                                <h3 className="text-xl font-semibold mb-3 text-gray-200">YouTube MV</h3>
+                                <div className="relative w-full overflow-hidden rounded-xl" style={{ paddingTop: '56.25%' /* 16:9 Aspect Ratio */ }}>
+                                    <iframe
+                                        className="absolute top-0 left-0 w-full h-full"
+                                        src={`https://www.youtube.com/embed/${youtubeVideoId}`}
+                                        title="YouTube video player"
+                                        frameBorder="0"
+                                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                        allowFullScreen
+                                    ></iframe>
+                                </div>
+                            </div>
+                        ) : (
+                            item_name_for_web_search && artist_name_for_web_search && !youtubeLoading && ( // Only show "No MV" if it's a song and search was attempted
+                                <div className="text-center my-4 p-3 bg-gray-800 rounded-lg text-gray-400 text-sm">
+                                    此歌曲無 MV 或搜尋失敗。
+                                </div>
+                            )
+                        )}
+
+
+                        <div className="flex-grow overflow-auto border border-gray-600 rounded-xl shadow-inner text-xs sm:text-sm">
                             <table className="min-w-full divide-y divide-gray-700">
                                 <thead className="bg-gray-800 sticky top-0">
                                     <tr>
                                         {["播放時間 (UTC)", "播放平台", "播放時長 (分:秒)", "歌曲名稱", "歌手", "專輯名稱",
                                             "播放完整度(%)", "開始原因", "結束原因", "隨機播放", "是否跳過", "離線播放", "隱身模式"].map(header => (
-                                                <th key={header} className="px-4 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">
+                                                <th key={header} className="px-2 py-2 sm:px-4 sm:py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">
                                                     {header}
                                                 </th>
                                             ))}
@@ -1334,29 +1720,29 @@ const App = () => {
 
                                         return (
                                             <tr key={index} className="hover:bg-gray-700 transition-colors duration-150 ease-in-out">
-                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{record.ts || 'N/A'}</td>
-                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{record.platform || 'N/A'}</td>
-                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200 text-right">{formatMsToMinSec(ms_played_int)}</td>
-                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{record.master_metadata_track_name || 'N/A'}</td>
-                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{record.master_metadata_album_artist_name || 'N/A'}</td>
-                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{record.master_metadata_album_album_name || 'N/A'}</td>
-                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200 text-center">{play_completion_percentage}</td>
-                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{record.reason_start || 'N/A'}</td>
-                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{record.reason_end || 'N/A'}</td>
-                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{record.shuffle === true ? "是" : (record.shuffle === false ? "否" : "N/A")}</td>
-                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{record.skipped === true ? "是" : (record.skipped === false ? "否" : "N/A")}</td>
-                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{record.offline === true ? "是" : (record.offline === false ? "否" : "N/A")}</td>
-                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{record.incognito_mode === true ? "是" : (record.incognito_mode === false ? "否" : "N/A")}</td>
+                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.ts || 'N/A'}</td>
+                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.platform || 'N/A'}</td>
+                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200 text-right">{formatMsToMinSec(ms_played_int)}</td>
+                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.master_metadata_track_name || 'N/A'}</td>
+                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.master_metadata_album_artist_name || 'N/A'}</td>
+                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.master_metadata_album_album_name || 'N/A'}</td>
+                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200 text-center">{play_completion_percentage}</td>
+                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.reason_start || 'N/A'}</td>
+                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.reason_end || 'N/A'}</td>
+                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.shuffle === true ? "是" : (record.shuffle === false ? "否" : "N/A")}</td>
+                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.skipped === true ? "是" : (record.skipped === false ? "否" : "N/A")}</td>
+                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.offline === true ? "是" : (record.offline === false ? "否" : "N/A")}</td>
+                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.incognito_mode === true ? "是" : (record.incognito_mode === false ? "否" : "N/A")}</td>
                                             </tr>
                                         );
                                     })}
                                 </tbody>
                             </table>
                         </div>
-                        <div className="flex justify-end mt-6">
+                        <div className="flex justify-end mt-4 sm:mt-6">
                             <button
                                 onClick={onClose}
-                                className="px-8 py-3 bg-gradient-to-r from-red-600 to-rose-700 text-white font-semibold rounded-xl shadow-lg hover:from-red-700 hover:to-rose-800 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
+                                className="px-6 py-2 sm:px-8 sm:py-3 bg-gradient-to-r from-red-600 to-rose-700 text-white font-semibold rounded-xl shadow-lg hover:from-red-700 hover:to-rose-800 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95 text-sm sm:text-base"
                             >
                                 關閉
                             </button>
@@ -1368,83 +1754,90 @@ const App = () => {
     };
 
     // Artist Modal Component
-    const ArtistModal = ({ isOpen, onClose, artistName, albumsData, songsData, onAlbumSelect, onSongDoubleClick, onArtistBioSearch, onArtistInsight }) => {
+    const ArtistModal = ({ isOpen, onClose, artistName, albumsData, songsData, onAlbumSelect, onSongDoubleClick, onArtistBioSearch, onArtistInsight, isLoading }) => {
         if (!isOpen) return null;
 
         return (
             <div ref={artistModalRef} className={`fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center p-4 z-50 transition-opacity duration-300 ${isOpen ? 'opacity-100 visible' : 'opacity-0 invisible'}`}>
-                <div className="bg-gradient-to-br from-green-800 to-emerald-900 text-white rounded-3xl shadow-2xl p-8 w-full max-w-6xl max-h-[95vh] flex flex-col transform scale-95 opacity-0 animate-fade-in-up">
-                    <h2 className="text-3xl font-bold mb-6 text-center drop-shadow-md">歌手詳細資料: {artistName}</h2>
+                <div className="bg-gradient-to-br from-green-800 to-emerald-900 text-white rounded-xl sm:rounded-3xl shadow-2xl p-4 sm:p-8 w-full max-w-full sm:max-w-4xl md:max-w-5xl lg:max-w-6xl max-h-[95vh] flex flex-col transform scale-95 opacity-0 animate-fade-in-up">
+                    <h2 className="text-xl sm:text-3xl font-bold mb-4 sm:mb-6 text-center drop-shadow-md">歌手詳細資料: {artistName}</h2>
 
-                    <div className="flex justify-center mb-6 gap-3">
+                    <div className="flex flex-wrap justify-center mb-4 sm:mb-6 gap-2 sm:gap-3">
                         <button
                             onClick={() => onArtistBioSearch(artistName)}
-                            className="px-6 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-xl shadow-lg hover:from-purple-600 hover:to-indigo-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
+                            className="px-4 py-2 sm:px-6 sm:py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-lg sm:rounded-xl shadow-lg hover:from-purple-600 hover:to-indigo-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95 text-sm sm:text-base"
                         >
                             Google 搜尋藝術家簡介
                         </button>
                         <button
                             onClick={() => onArtistInsight(artistName)}
-                            className="px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-xl shadow-lg hover:from-blue-600 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
+                            className="px-4 py-2 sm:px-6 sm:py-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg sm:rounded-xl shadow-lg hover:from-blue-600 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95 text-sm sm:text-base"
                         >
                             ✨ 歌手洞察
                         </button>
                     </div>
 
-                    <div className="flex flex-grow overflow-hidden gap-6">
-                        {/* Left Pane: Albums */}
-                        <div className="w-1/3 flex flex-col border border-gray-600 rounded-xl p-4 overflow-auto bg-gray-800 shadow-inner">
-                            <h3 className="text-xl font-semibold mb-4 sticky top-0 bg-gray-800 z-10 p-2 -mx-4 -mt-4 border-b border-gray-700">專輯列表</h3>
-                            <table className="min-w-full divide-y divide-gray-700">
-                                <thead className="bg-gray-900 sticky top-0">
-                                    <tr>
-                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">專輯名稱</th>
-                                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-300 uppercase tracking-wider">播放次數</th>
-                                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-300 uppercase tracking-wider">總時長</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="bg-gray-800 divide-y divide-gray-700">
-                                    {albumsData.map((album, index) => (
-                                        <tr key={index} className="hover:bg-gray-700 cursor-pointer transition-colors duration-150 ease-in-out" onClick={() => onAlbumSelect(album.albumName)}>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{album.albumName}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200 text-right">{album.count}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200 text-right">{album.totalDuration}</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
+                    {isLoading ? (
+                        <div className="flex flex-grow justify-center items-center h-full">
+                            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white"></div>
+                            <span className="ml-3 text-xl">載入歌手資料中...</span>
                         </div>
-
-                        {/* Right Pane: Songs */}
-                        <div className="w-2/3 flex flex-col border border-gray-600 rounded-xl p-4 overflow-auto bg-gray-800 shadow-inner">
-                            <h3 className="text-xl font-semibold mb-4 sticky top-0 bg-gray-800 z-10 p-2 -mx-4 -mt-4 border-b border-gray-700">歌曲列表</h3>
-                            <table className="min-w-full divide-y divide-gray-700">
-                                <thead className="bg-gray-900 sticky top-0">
-                                    <tr>
-                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">歌曲名稱</th>
-                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">所屬專輯</th>
-                                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-300 uppercase tracking-wider">播放次數</th>
-                                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-300 uppercase tracking-wider">總時長</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="bg-gray-800 divide-y divide-gray-700">
-                                    {songsData.map((song, index) => (
-                                        <tr key={index} className="hover:bg-gray-700 cursor-pointer transition-colors duration-150 ease-in-out" onDoubleClick={() => onSongDoubleClick(song.songName, song.albumName)}>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{song.songName}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200">{song.albumName}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200 text-right">{song.count}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-200 text-right">{song.totalDuration}</td>
+                    ) : (
+                        <div className="flex flex-col md:flex-row flex-grow overflow-hidden gap-4 sm:gap-6">
+                            {/* Left Pane: Albums */}
+                            <div className="w-full md:w-1/3 flex flex-col border border-gray-600 rounded-xl p-3 sm:p-4 overflow-auto bg-gray-800 shadow-inner">
+                                <h3 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4 sticky top-0 bg-gray-800 z-10 p-2 -mx-3 -mt-3 sm:-mx-4 sm:-mt-4 border-b border-gray-700">專輯列表</h3>
+                                <table className="min-w-full divide-y divide-gray-700 text-xs sm:text-sm">
+                                    <thead className="bg-gray-900 sticky top-0">
+                                        <tr>
+                                            <th className="px-2 py-2 sm:px-4 sm:py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">專輯名稱</th>
+                                            <th className="px-2 py-2 sm:px-4 sm:py-3 text-right text-xs font-medium text-gray-300 uppercase tracking-wider">播放次數</th>
+                                            <th className="px-2 py-2 sm:px-4 sm:py-3 text-right text-xs font-medium text-gray-300 uppercase tracking-wider">總時長</th>
                                         </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
+                                    </thead>
+                                    <tbody className="bg-gray-800 divide-y divide-gray-700">
+                                        {albumsData.map((album, index) => (
+                                            <tr key={index} className="hover:bg-gray-700 cursor-pointer transition-colors duration-150 ease-in-out" onClick={() => onAlbumSelect(album.albumName)}>
+                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{album.albumName}</td>
+                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200 text-right">{album.count}</td>
+                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200 text-right">{album.totalDuration}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
 
-                    <div className="flex justify-end mt-6">
+                            {/* Right Pane: Songs */}
+                            <div className="w-full md:w-2/3 flex flex-col border border-gray-600 rounded-xl p-3 sm:p-4 overflow-auto bg-gray-800 shadow-inner">
+                                <h3 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4 sticky top-0 bg-gray-800 z-10 p-2 -mx-3 -mt-3 sm:-mx-4 sm:-mt-4 border-b border-gray-700">歌曲列表</h3>
+                                <table className="min-w-full divide-y divide-gray-700 text-xs sm:text-sm">
+                                    <thead className="bg-gray-900 sticky top-0">
+                                        <tr>
+                                            <th className="px-2 py-2 sm:px-4 sm:py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">歌曲名稱</th>
+                                            <th className="px-2 py-2 sm:px-4 sm:py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">所屬專輯</th>
+                                            <th className="px-2 py-2 sm:px-4 sm:py-3 text-right text-xs font-medium text-gray-300 uppercase tracking-wider">播放次數</th>
+                                            <th className="px-2 py-2 sm:px-4 sm:py-3 text-right text-xs font-medium text-gray-300 uppercase tracking-wider">總時長</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="bg-gray-800 divide-y divide-gray-700">
+                                        {songsData.map((song, index) => (
+                                            <tr key={index} className="hover:bg-gray-700 cursor-pointer transition-colors duration-150 ease-in-out" onDoubleClick={() => onSongDoubleClick(song.songName, song.albumName)}>
+                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{song.songName}</td>
+                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{song.albumName}</td>
+                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200 text-right">{song.count}</td>
+                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200 text-right">{song.totalDuration}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="flex justify-end mt-4 sm:mt-6">
                         <button
                             onClick={onClose}
-                            className="px-8 py-3 bg-gradient-to-r from-red-600 to-rose-700 text-white font-semibold rounded-xl shadow-lg hover:from-red-700 hover:to-rose-800 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95"
+                            className="px-6 py-2 sm:px-8 sm:py-3 bg-gradient-to-r from-red-600 to-rose-700 text-white font-semibold rounded-xl shadow-lg hover:from-red-700 hover:to-rose-800 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition transform hover:scale-105 active:scale-95 text-sm sm:text-base"
                         >
                             關閉
                         </button>
@@ -1459,9 +1852,9 @@ const App = () => {
 
         return (
             <div className="fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center p-4 z-50">
-                <div className="bg-gradient-to-br from-gray-700 to-gray-900 text-white rounded-3xl shadow-2xl p-8 w-full max-w-lg max-h-[90vh] flex flex-col">
-                    <h2 className="text-2xl font-bold mb-4 text-center">{title}</h2>
-                    <div className="flex-grow overflow-auto mb-6 p-4 bg-gray-800 rounded-lg border border-gray-600">
+                <div className="bg-gradient-to-br from-gray-700 to-gray-900 text-white rounded-xl sm:rounded-3xl shadow-2xl p-4 sm:p-8 w-full max-w-full sm:max-w-md md:max-w-lg lg:max-w-xl max-h-[90vh] flex flex-col">
+                    <h2 className="text-xl sm:text-2xl font-bold mb-4 text-center">{title}</h2>
+                    <div className="flex-grow overflow-auto mb-4 sm:mb-6 p-3 sm:p-4 bg-gray-800 rounded-lg border border-gray-600 text-sm sm:text-base">
                         {isLoading ? (
                             <div className="flex justify-center items-center h-full">
                                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
@@ -1474,7 +1867,7 @@ const App = () => {
                     <div className="flex justify-end">
                         <button
                             onClick={onClose}
-                            className="px-6 py-2 bg-gradient-to-r from-red-500 to-rose-600 text-white rounded-xl shadow-lg hover:from-red-600 hover:to-rose-700 transition transform hover:scale-105 active:scale-95"
+                            className="px-4 py-2 sm:px-6 sm:py-2 bg-gradient-to-r from-red-500 to-rose-600 text-white rounded-xl shadow-lg hover:from-red-600 hover:to-rose-700 transition transform hover:scale-105 active:scale-95 text-sm sm:text-base"
                         >
                             關閉
                         </button>
@@ -1489,26 +1882,26 @@ const App = () => {
 
         return (
             <div className="fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center p-4 z-50">
-                <div className="bg-gradient-to-br from-blue-800 to-purple-900 text-white rounded-3xl shadow-2xl p-8 w-full max-w-md flex flex-col items-center">
-                    <h2 className="text-2xl font-bold mb-6 text-center">推薦歌單選項</h2>
-                    <p className="text-lg text-center mb-8">您希望如何獲取推薦歌單？</p>
-                    <div className="flex flex-col space-y-4 w-full">
+                <div className="bg-gradient-to-br from-blue-800 to-purple-900 text-white rounded-xl sm:rounded-3xl shadow-2xl p-4 sm:p-8 w-full max-w-full sm:max-w-md flex flex-col items-center">
+                    <h2 className="text-xl sm:text-2xl font-bold mb-4 sm:mb-6 text-center">推薦歌單選項</h2>
+                    <p className="text-base sm:text-lg text-center mb-6 sm:mb-8">您希望如何獲取推薦歌單？</p>
+                    <div className="flex flex-col space-y-3 sm:space-y-4 w-full">
                         <button
                             onClick={() => onSelect('random')}
-                            className="px-8 py-4 bg-gradient-to-r from-teal-500 to-cyan-600 text-white font-semibold rounded-xl shadow-lg hover:from-teal-600 hover:to-cyan-700 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 transition transform hover:scale-105 active:scale-95"
+                            className="px-6 py-3 sm:px-8 sm:py-4 bg-gradient-to-r from-teal-500 to-cyan-600 text-white font-semibold rounded-xl shadow-lg hover:from-teal-600 hover:to-cyan-700 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 transition transform hover:scale-105 active:scale-95 text-base sm:text-lg"
                         >
                             隨機推薦
                         </button>
                         <button
                             onClick={() => onSelect('unheard')}
-                            className="px-8 py-4 bg-gradient-to-r from-orange-500 to-red-600 text-white font-semibold rounded-xl shadow-lg hover:from-orange-600 hover:to-red-700 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 transition transform hover:scale-105 active:scale-95"
+                            className="px-6 py-3 sm:px-8 sm:py-4 bg-gradient-to-r from-orange-500 to-red-600 text-white font-semibold rounded-xl shadow-lg hover:from-orange-600 hover:to-red-700 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 transition transform hover:scale-105 active:scale-95 text-base sm:text-lg"
                         >
                             隨機但沒有聽過的歌
                         </button>
                     </div>
                     <button
                         onClick={onClose}
-                        className="mt-8 px-6 py-3 bg-gradient-to-r from-gray-500 to-gray-700 text-white rounded-xl shadow-lg hover:from-gray-600 hover:to-gray-800 transition transform hover:scale-105 active:scale-95"
+                        className="mt-6 sm:mt-8 px-4 py-2 sm:px-6 sm:py-3 bg-gradient-to-r from-gray-500 to-gray-700 text-white rounded-xl shadow-lg hover:from-gray-600 hover:to-gray-800 transition transform hover:scale-105 active:scale-95 text-sm sm:text-base"
                     >
                         取消
                     </button>
@@ -1517,9 +1910,277 @@ const App = () => {
         );
     };
 
+    const RecapDateSelectModal = ({ isOpen, onClose, onConfirm, initialStartDate, initialEndDate, onStartDateChange, onEndDateChange, onApplyAllDataChange, applyAllData }) => {
+        if (!isOpen) return null;
+    
+        return (
+            <div className="fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center p-4 z-50">
+                <div className="bg-gradient-to-br from-indigo-800 to-blue-900 text-white rounded-xl sm:rounded-3xl shadow-2xl p-4 sm:p-8 w-full max-w-full sm:max-w-md flex flex-col items-center">
+                    <h2 className="text-xl sm:text-2xl font-bold mb-4 sm:mb-6 text-center">選擇回顧日期範圍</h2>
+                    <p className="text-base sm:text-lg text-center mb-6 sm:mb-8">請選擇您希望回顧的日期區間，或選擇分析所有資料。</p>
+                    
+                    <div className="w-full space-y-4 mb-6">
+                        <div className="flex items-center space-x-2">
+                            <label htmlFor="recapStartDate" className="text-gray-200 text-sm sm:text-base">開始日期 (YYYYMMDD):</label>
+                            <input
+                                id="recapStartDate"
+                                type="text"
+                                className={`flex-grow p-2 sm:p-3 border rounded-lg text-sm sm:text-base ${applyAllData ? 'bg-gray-700 border-gray-600 cursor-not-allowed' : 'bg-gray-100 border-gray-300'} text-gray-900 placeholder-gray-400 focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm`}
+                                value={initialStartDate}
+                                onChange={(e) => onStartDateChange(e.target.value)}
+                                disabled={applyAllData}
+                                placeholder="20230101"
+                            />
+                        </div>
+                        <div className="flex items-center space-x-2">
+                            <label htmlFor="recapEndDate" className="text-gray-200 text-sm sm:text-base">結束日期 (YYYYMMDD):</label>
+                            <input
+                                id="recapEndDate"
+                                type="text"
+                                className={`flex-grow p-2 sm:p-3 border rounded-lg text-sm sm:text-base ${applyAllData ? 'bg-gray-700 border-gray-600 cursor-not-allowed' : 'bg-gray-100 border-gray-300'} text-gray-900 placeholder-gray-400 focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm`}
+                                value={initialEndDate}
+                                onChange={(e) => onEndDateChange(e.target.value)}
+                                disabled={applyAllData}
+                                placeholder="20231231"
+                            />
+                        </div>
+                        <div className="flex items-center mt-4">
+                            <input
+                                type="checkbox"
+                                id="applyAllData"
+                                checked={applyAllData}
+                                onChange={(e) => onApplyAllDataChange(e.target.checked)}
+                                className="form-checkbox h-5 w-5 text-purple-600 rounded focus:ring-purple-500"
+                            />
+                            <label htmlFor="applyAllData" className="ml-2 text-gray-200 text-base sm:text-lg">套用全部資料 (將不顯示總收聽時長)</label>
+                        </div>
+                    </div>
+    
+                    <div className="flex space-x-4">
+                        <button
+                            onClick={() => onConfirm(initialStartDate, initialEndDate, applyAllData)}
+                            className="px-6 py-3 sm:px-8 sm:py-4 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-xl shadow-lg hover:from-green-600 hover:to-emerald-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition transform hover:scale-105 active:scale-95 text-base sm:text-lg"
+                        >
+                            確認
+                        </button>
+                        <button
+                            onClick={onClose}
+                            className="px-6 py-3 sm:px-8 sm:py-4 bg-gradient-to-r from-gray-500 to-gray-700 text-white rounded-xl shadow-lg hover:from-gray-600 hover:to-gray-800 transition transform hover:scale-105 active:scale-95 text-base sm:text-lg"
+                        >
+                            取消
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    // New HowToUse component (placed inside App for self-contained immersive)
+    const HowToUse = ({ onBack }) => {
+        return (
+            <div className="bg-white p-4 sm:p-8 rounded-2xl sm:rounded-3xl shadow-xl w-full mx-auto max-w-full sm:max-w-3xl md:max-w-5xl lg:max-w-7xl">
+                <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-center text-gray-900 mb-4 sm:mb-8 tracking-wide">如何使用 Spotify 播放記錄分析器</h1>
+
+                <div className="prose max-w-none text-gray-800 space-y-4 sm:space-y-6 text-sm sm:text-base">
+                    <h2 className="text-xl sm:text-3xl font-semibold text-gray-700 mb-2 sm:mb-4 border-b-2 border-gray-200 pb-1 sm:pb-2">1. 取得您的 Spotify 播放記錄</h2>
+                    <p>要使用本工具，您需要從 Spotify 獲取您的「延伸串流歷史記錄」資料。請按照以下步驟操作：</p>
+                    <ol className="list-decimal list-inside pl-4 space-y-1 sm:space-y-2">
+                        <li>登入您的 Spotify 帳戶。</li>
+                        <li>前往 <a href="https://www.spotify.com/tw/account/privacy/" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline font-medium">Spotify 隱私設定頁面</a>。</li>
+                        <li>捲動到「下載您的資料」部分。</li>
+                        <li>選擇「延伸串流歷史記錄」選項，然後點擊「要求資料」或「提交申請」。</li>
+                        <li>Spotify 可能需要數天或數週才能準備好您的資料。準備好後，您會收到一封包含下載連結的電子郵件。下載後，您將會得到一個或多個名為 `StreamingHistoryX.json` 的檔案（其中 X 是數字，例如 `StreamingHistory0.json`, `StreamingHistory1.json`）。</li>
+                    </ol>
+
+                    <h2 className="text-xl sm:text-3xl font-semibold text-gray-700 mb-2 sm:mb-4 border-b-2 border-gray-200 pb-1 sm:pb-2 mt-6 sm:mt-8">2. 上傳您的 JSON 檔案</h2>
+                    <ol className="list-decimal list-inside pl-4 space-y-1 sm:space-y-2">
+                        <li>在主分析器頁面，點擊「選擇 JSON 檔案」按鈕。</li>
+                        <li>選取您從 Spotify 下載的所有 `StreamingHistoryX.json` 檔案。您可以一次選取多個檔案。</li>
+                        <li>應用程式會自動載入並合併這些資料，並顯示載入進度。</li>
+                    </ol>
+
+                    <h2 className="text-xl sm:text-3xl font-semibold text-gray-700 mb-2 sm:mb-4 border-b-2 border-gray-200 pb-1 sm:pb-2 mt-6 sm:mt-8">3. 設定篩選與排行條件</h2>
+                    <p>載入資料後，您可以根據自己的需求設定分析條件：</p>
+                    <ul className="list-disc list-inside pl-4 space-y-1 sm:space-y-2">
+                        <li>**依日期篩選？**：勾選此項以啟用日期範圍篩選。在「開始日期」和「結束日期」欄位中輸入日期（格式為YYYYMMDD，例如 `20230101`）。</li>
+                        <li>**排行項目**：從下拉選單中選擇您希望排行的項目，例如「歌曲名稱 - 歌手」、「歌手」、「專輯 - 歌手」、「播放平台」等。</li>
+                        <li>**顯示數量**：輸入數字以顯示前 N 個結果（例如 `10`），或輸入「all」以顯示所有結果。</li>
+                        <li>**排行標準**：選擇排行的依據，包括「播放次數」（預設）、「總播放時長」或「平均播放時長」。</li>
+                        <li>**趨勢分析**：您可以從下拉選單中選擇「每月總收聽時間」、「每月熱門歌曲」或「每月熱門歌手」來查看數據的趨勢。此選項會禁用常規排行設定。</li>
+                        <li>**搜尋結果**：在主介面的「搜尋結果」欄位中輸入關鍵字，可以在當前顯示的排行結果中進行即時搜尋。</li>
+                    </ul>
+
+                    <h2 className="text-xl sm:text-3xl font-semibold text-gray-700 mb-2 sm:mb-4 border-b-2 border-gray-200 pb-1 sm:pb-2 mt-6 sm:mt-8">4. 開始分析與查看結果</h2>
+                    <ol className="list-decimal list-inside pl-4 space-y-1 sm:space-y-2">
+                        <li>設定好條件後，點擊「開始分析」按鈕。</li>
+                        <li>結果將以表格形式顯示在頁面下方。</li>
+                        <li>**查看詳細資料**：您可以**單擊**表格中的「單曲」、「歌曲名稱 - 歌手」、「專輯」或「歌手」項目，以彈出一個視窗查看其詳細的播放記錄。此時，如果該歌曲有 MV，將會在視窗中自動播放。本應用程式已內建 YouTube Data API v3 金鑰，無需手動輸入。</li>
+                        <li>**匯出數據**：您可以點擊「匯出 CSV」按鈕將當前主分析結果或詳細記錄視窗中的數據匯出為 CSV 檔案。</li>
+                        <li>**重設應用程式**：點擊「重設」按鈕將清除所有載入的數據和篩選條件，將應用程式恢復到初始狀態。</li>
+                    </ol>
+
+                    <h2 className="text-xl sm:text-3xl font-semibold text-gray-700 mb-2 sm:mb-4 border-b-2 border-gray-200 pb-1 sm:pb-2 mt-6 sm:mt-8">5. Gemini AI 智慧分析與推薦</h2>
+                    <p>本工具整合了 Gemini AI 功能，為您提供更深入的音樂洞察和智慧推薦：</p>
+                    <ul className="list-disc list-inside pl-4 space-y-1 sm:space-y-2">
+                        <li>**✨ 分析結果洞察**：點擊此按鈕，Gemini AI 將對您當前的排行結果（主要基於歌曲和播放習慣）進行綜合分析，提供關於您的**收聽習慣和可能的曲風偏好**的洞察。</li>
+                        <li>**✨ Gemini 推薦歌單**：當您在「排行項目」中選擇「歌曲名稱 - 歌手」時，此按鈕將可用。點擊它，您將可以選擇：
+                            <ul className="list-circle list-inside pl-4 space-y-1 mt-2">
+                                <li>**隨機推薦**：Gemini 將根據您的整體收聽數據，為您推薦 30 首新的歌曲。</li>
+                                <li>**隨機但沒有聽過的歌**：Gemini 會在推薦時，智慧地排除您過去**最常播放的前 300 首歌曲**，以確保為您推薦的歌曲對您來說是全新的聆聽體驗。</li>
+                            </ul>
+                        </li>
+                        <li>**✨ 歌曲洞察**：在歌曲的詳細記錄頁面中，點擊此按鈕可讓 Gemini 分析並總結該歌曲的主題、歌詞意義或整體氛圍。</li>
+                        <li>**✨ 歌手洞察**：在歌手的詳細資料頁面中，點擊此按鈕可讓 Gemini 概述該歌手的音樂風格、主要影響及對音樂的整體影響。</li>
+                        <li>**✨ 播放回顧 (Recap)**：點擊此按鈕，將彈出日期選擇框，您可以選擇特定區間或「套用全部資料」來生成一個類似 Spotify Wrapped 的視覺化音樂回顧。</li>
+                    </ul>
+                </div>
+
+                <div className="flex justify-center mt-6 sm:mt-8">
+                    <button
+                        onClick={onBack}
+                        className="px-6 py-3 sm:px-8 sm:py-4 bg-gradient-to-r from-indigo-600 to-purple-700 text-white font-semibold rounded-2xl shadow-xl hover:from-indigo-700 hover:to-purple-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95 text-base sm:text-lg"
+                    >
+                        返回主分析器
+                    </button>
+                </div>
+            </div>
+        );
+    };
+
+    const RecapPage = ({ data, isLoading, onBack }) => {
+        if (isLoading) {
+            return (
+                <div className="flex flex-col items-center justify-center min-h-[500px] bg-gradient-to-br from-gray-900 to-black text-white rounded-3xl shadow-xl p-8">
+                    <div className="animate-spin rounded-full h-20 w-20 border-t-4 border-b-4 border-purple-500"></div>
+                    <p className="mt-6 text-xl font-semibold">正在生成您的音樂回顧，請稍候...</p>
+                    <p className="mt-2 text-md text-gray-400">這可能需要幾秒鐘</p>
+                </div>
+            );
+        }
+
+        if (!data) {
+            return (
+                <div className="flex flex-col items-center justify-center min-h-[500px] bg-gradient-to-br from-gray-900 to-black text-white rounded-3xl shadow-xl p-8">
+                    <p className="text-xl font-semibold">沒有回顧數據可顯示。請先載入檔案並生成回顧。</p>
+                    <button
+                        onClick={onBack}
+                        className="mt-8 px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-700 text-white font-semibold rounded-2xl shadow-xl hover:from-indigo-700 hover:to-purple-800 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95"
+                    >
+                        返回主分析器
+                    </button>
+                </div>
+            );
+        }
+
+        const renderCard = (title, content, type, cardData) => {
+            let bgColor = "from-red-600 to-pink-700";
+            let textColor = "text-white";
+            let contentJsx;
+
+            if (type === 'totalMinutes') {
+                bgColor = "from-blue-600 to-purple-700";
+                contentJsx = (
+                    <>
+                        <p className="text-5xl md:text-6xl font-bold mb-2 drop-shadow-lg">{cardData.value}</p>
+                        <p className="text-3xl md:text-4xl mb-4 opacity-80">{cardData.unit}</p>
+                        <p className="text-sm md:text-base opacity-70 mb-4">{cardData.subText}</p>
+                        {cardData.biggestListeningDay.date !== "N/A" && (
+                            <p className="text-sm md:text-base font-semibold">
+                                最高收聽日: {cardData.biggestListeningDay.date} ({cardData.biggestListeningDay.minutes} 分鐘)
+                            </p>
+                        )}
+                    </>
+                );
+            } else if (type === 'topSongs') {
+                bgColor = "from-green-600 to-emerald-700";
+                contentJsx = (
+                    <ol className="list-decimal list-inside text-lg md:text-xl space-y-2">
+                        {cardData.songs.map((song, index) => (
+                            <li key={index} className="flex items-center">
+                                <span className="font-semibold w-6 shrink-0">{song.rank}.</span>
+                                <span className="flex-grow pl-2 truncate">{song.song} - {song.artist}</span>
+                            </li>
+                        ))}
+                    </ol>
+                );
+            } else if (type === 'topArtists') {
+                bgColor = "from-orange-600 to-red-700";
+                contentJsx = (
+                    <ol className="list-decimal list-inside text-lg md:text-xl space-y-2">
+                        {cardData.artists.map((artist, index) => (
+                            <li key={index} className="flex items-center">
+                                <span className="font-semibold w-6 shrink-0">{artist.rank}.</span>
+                                <span className="flex-grow pl-2 truncate">{artist.artist}</span>
+                            </li>
+                        ))}
+                    </ol>
+                );
+            } else if (type === 'wordsToDescribe') {
+                bgColor = "from-teal-600 to-cyan-700";
+                contentJsx = (
+                    <>
+                        <div className="flex flex-wrap justify-center gap-2 mb-4">
+                            {cardData.words.map((word, index) => (
+                                <span key={index} className="px-4 py-2 bg-white bg-opacity-20 rounded-full text-sm md:text-base font-semibold shadow-md">
+                                    {word}
+                                </span>
+                            ))}
+                        </div>
+                        <p className="text-sm md:text-base text-center opacity-80">{cardData.description}</p>
+                    </>
+                );
+            } else if (type === 'musicEvolution') {
+                bgColor = "from-purple-600 to-pink-700";
+                contentJsx = (
+                    <p className="text-base md:text-lg text-center leading-relaxed">{cardData.description}</p>
+                );
+            } else { // Generic content
+                contentJsx = <p className="text-base md:text-lg text-center leading-relaxed">{content}</p>;
+            }
+
+            return (
+                <div className={`relative bg-gradient-to-br ${bgColor} ${textColor} rounded-2xl p-6 md:p-8 shadow-xl flex flex-col items-center justify-center text-center transform hover:scale-105 transition-transform duration-300 ease-in-out`}>
+                    <h3 className="text-2xl md:text-3xl font-bold mb-4 drop-shadow">{title}</h3>
+                    {contentJsx}
+                </div>
+            );
+        };
+
+        return (
+            <div className="bg-gradient-to-br from-gray-900 to-black text-white p-4 sm:p-6 rounded-3xl shadow-xl w-full mx-auto max-w-full lg:max-w-7xl min-h-[calc(100vh-100px)] flex flex-col">
+                <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold text-center mb-6 sm:mb-10 drop-shadow-xl text-gradient-to-r from-purple-400 via-pink-400 to-blue-400">
+                    {data.recapTitle || "您的音樂回顧"}
+                </h1>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-8 flex-grow">
+                    {data.totalMinutesListenedCard && renderCard(data.totalMinutesListenedCard.title, null, 'totalMinutes', data.totalMinutesListenedCard)}
+                    {data.topSongsCard && renderCard(data.topSongsCard.title, null, 'topSongs', data.topSongsCard)}
+                    {data.topArtistsCard && renderCard(data.topArtistsCard.title, null, 'topArtists', data.topArtistsCard)}
+                    {data.wordsToDescribeCard && renderCard(data.wordsToDescribeCard.title, null, 'wordsToDescribe', data.wordsToDescribeCard)}
+                    {data.musicEvolutionCard && renderCard(data.musicEvolutionCard.title, null, 'musicEvolution', data.musicEvolutionCard)}
+                    
+                    {/* Placeholder Card (Optional, for visual balance if needed) */}
+                    <div className="relative bg-gradient-to-br from-gray-800 to-gray-900 text-gray-500 rounded-2xl p-6 md:p-8 shadow-xl flex flex-col items-center justify-center text-center">
+                        <h3 className="text-2xl md:text-3xl font-bold mb-4 drop-shadow">更多洞察即將推出...</h3>
+                        <p className="text-base md:text-lg opacity-70">敬請期待未來的更新！</p>
+                    </div>
+                </div>
+
+                <div className="flex justify-center mt-8 sm:mt-12">
+                    <button
+                        onClick={onBack}
+                        className="px-6 py-3 sm:px-8 sm:py-4 bg-gradient-to-r from-indigo-600 to-purple-700 text-white font-semibold rounded-2xl shadow-xl hover:from-indigo-700 hover:to-purple-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95"
+                    >
+                        返回主分析器
+                    </button>
+                </div>
+            </div>
+        );
+    };
+
 
     return (
-        <div className="min-h-screen bg-gradient-to-br from-gray-200 to-gray-300 p-6 font-inter text-gray-800">
+        <div className="min-h-screen bg-gradient-to-br from-gray-200 to-gray-300 p-4 sm:p-6 font-inter text-gray-800">
             <style>
                 {`
                 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -1599,395 +2260,453 @@ const App = () => {
                 .text-center {
                     text-align: center;
                 }
+                .text-gradient-to-r {
+                    background-image: linear-gradient(to right, var(--tw-gradient-stops));
+                    -webkit-background-clip: text;
+                    -webkit-text-fill-color: transparent;
+                }
                 `}
             </style>
 
-            <div className="bg-white p-8 rounded-3xl shadow-xl w-full mx-auto max-w-7xl">
-                <h1 className="text-4xl font-bold text-center text-gray-900 mb-8 tracking-wide">Spotify 播放記錄分析器</h1>
+            {/* 導航按鈕 */}
+            <div className="flex justify-center mb-6 sm:mb-8 space-x-3 sm:space-x-4">
+                <button
+                    onClick={() => setCurrentPage('analyzer')}
+                    className={`px-5 py-2 sm:px-6 sm:py-3 rounded-xl shadow-lg font-semibold transition transform hover:scale-105 active:scale-95 text-sm sm:text-base ${currentPage === 'analyzer' ? 'bg-gradient-to-r from-blue-600 to-indigo-700 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
+                >
+                    主分析器
+                </button>
+                <button
+                    onClick={() => setCurrentPage('how-to-use')}
+                    className={`px-5 py-2 sm:px-6 sm:py-3 rounded-xl shadow-lg font-semibold transition transform hover:scale-105 active:scale-95 text-sm sm:text-base ${currentPage === 'how-to-use' ? 'bg-gradient-to-r from-blue-600 to-indigo-700 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
+                >
+                    使用說明
+                </button>
+                 <button
+                    onClick={() => {
+                        if (allStreamingDataOriginal.length === 0) {
+                            alert("請先載入您的 Spotify 播放記錄檔案才能生成回顧。");
+                            return;
+                        }
+                        setIsRecapDateSelectModalOpen(true); // Open the date selection modal
+                    }}
+                    className={`px-5 py-2 sm:px-6 sm:py-3 rounded-xl shadow-lg font-semibold transition transform hover:scale-105 active:scale-95 text-sm sm:text-base ${currentPage === 'recap' ? 'bg-gradient-to-r from-blue-600 to-indigo-700 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
+                    disabled={allStreamingDataOriginal.length === 0}
+                >
+                    播放回顧 (Recap)
+                </button>
+            </div>
 
-                {/* 檔案選取區 */}
-                <div className="mb-8 p-6 border border-gray-200 rounded-2xl bg-gray-50 shadow-md">
-                    <h2 className="text-2xl font-semibold text-gray-700 mb-4">檔案選取</h2>
-                    <div className="flex flex-col md:flex-row items-center space-y-4 md:space-y-0 md:space-x-6">
-                        <input
-                            type="file"
-                            ref={fileInputRef}
-                            multiple
-                            accept=".json"
-                            onChange={handleFileChange}
-                            className="hidden"
-                            id="file-upload"
-                        />
-                        <label
-                            htmlFor="file-upload"
-                            className="inline-flex items-center justify-center px-8 py-3 border border-transparent text-lg font-medium rounded-xl text-white bg-gradient-to-r from-indigo-600 to-purple-700 hover:from-indigo-700 hover:to-purple-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 cursor-pointer transition duration-300 ease-in-out shadow-lg hover:shadow-xl transform hover:scale-105 active:scale-95"
-                        >
-                            選擇 JSON 檔案
-                        </label>
-                        <span className="text-gray-700 text-xl flex-shrink-0">{selectedFilesLabel}</span>
-                        <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden flex-grow shadow-inner">
-                            <div
-                                className="h-full bg-gradient-to-r from-blue-400 to-blue-600 rounded-full transition-all duration-300 ease-out"
-                                style={{ width: `${progress}%` }}
-                            ></div>
+            {/* 根據 currentPage 渲染不同頁面 */}
+            {currentPage === 'analyzer' && (
+                <div className="bg-white p-4 sm:p-8 rounded-2xl sm:rounded-3xl shadow-xl w-full mx-auto max-w-full sm:max-w-3xl md:max-w-5xl lg:max-w-7xl">
+                    <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-center text-gray-900 mb-4 sm:mb-8 tracking-wide">Spotify 播放記錄分析器</h1>
+
+                    {/* 檔案選取區 */}
+                    <div className="mb-6 sm:mb-8 p-4 sm:p-6 border border-gray-200 rounded-2xl bg-gray-50 shadow-md">
+                        <h2 className="text-xl sm:text-2xl font-semibold text-gray-700 mb-3 sm:mb-4">檔案選取</h2>
+                        <div className="flex flex-col md:flex-row items-center space-y-3 md:space-y-0 md:space-x-6">
+                            <input
+                                type="file"
+                                ref={fileInputRef}
+                                multiple
+                                accept=".json"
+                                onChange={handleFileChange}
+                                className="hidden"
+                                id="file-upload"
+                            />
+                            <label
+                                htmlFor="file-upload"
+                                className="inline-flex items-center justify-center px-6 py-3 sm:px-8 sm:py-3 text-base sm:text-lg font-medium rounded-xl text-white bg-gradient-to-r from-indigo-600 to-purple-700 hover:from-indigo-700 hover:to-purple-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 cursor-pointer transition duration-300 ease-in-out shadow-lg hover:shadow-xl transform hover:scale-105 active:scale-95"
+                            >
+                                選擇 JSON 檔案
+                            </label>
+                            <span className="text-gray-700 text-base sm:text-xl flex-shrink-0">{selectedFilesLabel}</span>
+                            <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden flex-grow shadow-inner">
+                                <div
+                                    className="h-full bg-gradient-to-r from-blue-400 to-blue-600 rounded-full transition-all duration-300 ease-out"
+                                    style={{ width: `${progress}%` }}
+                                ></div>
+                            </div>
                         </div>
                     </div>
-                </div>
 
-                {/* 篩選條件區 */}
-                <div className="mb-8 p-6 border border-gray-200 rounded-2xl bg-gray-50 shadow-md">
-                    <h2 className="text-2xl font-semibold text-gray-700 mb-4">篩選與排行條件</h2>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
-                        {/* 日期篩選 */}
-                        <div className="flex flex-col space-y-3">
-                            <div className="flex items-center space-x-2">
-                                <input
-                                    type="checkbox"
-                                    id="dateFilter"
-                                    checked={dateFilterEnabled}
-                                    onChange={(e) => setDateFilterEnabled(e.target.checked)}
-                                    className="form-checkbox h-5 w-5 text-indigo-600 rounded focus:ring-indigo-500"
-                                />
-                                <label htmlFor="dateFilter" className="text-gray-700 font-medium text-lg">依日期篩選?</label>
+                    {/* 篩選條件區 */}
+                    <div className="mb-6 sm:mb-8 p-4 sm:p-6 border border-gray-200 rounded-2xl bg-gray-50 shadow-md">
+                        <h2 className="text-xl sm:text-2xl font-semibold text-gray-700 mb-3 sm:mb-4">篩選與排行條件</h2>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 mb-4 sm:mb-6">
+                            {/* 日期篩選 */}
+                            <div className="flex flex-col space-y-2 sm:space-y-3">
+                                <div className="flex items-center space-x-2">
+                                    <input
+                                        type="checkbox"
+                                        id="dateFilter"
+                                        checked={dateFilterEnabled}
+                                        onChange={(e) => setDateFilterEnabled(e.target.checked)}
+                                        className="form-checkbox h-4 w-4 sm:h-5 sm:w-5 text-indigo-600 rounded focus:ring-indigo-500"
+                                    />
+                                    <label htmlFor="dateFilter" className="text-gray-700 font-medium text-base sm:text-lg">依日期篩選?</label>
+                                </div>
+                                <div className="flex items-center space-x-2">
+                                    <label htmlFor="startDate" className="text-gray-700 text-sm sm:text-base">開始日期 (YYYYMMDD):</label>
+                                    <input
+                                        type="text"
+                                        id="startDate"
+                                        className={`p-2 sm:p-3 border rounded-lg w-full text-sm sm:text-base ${dateFilterEnabled ? 'border-gray-300 bg-white' : 'bg-gray-100 border-gray-200 cursor-not-allowed'} focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm`}
+                                        value={startDate}
+                                        onChange={(e) => setStartDate(e.target.value)}
+                                        disabled={!dateFilterEnabled}
+                                        placeholder="20230101"
+                                        title="請輸入YYYYMMDD 格式的日期，例如 20230101"
+                                    />
+                                </div>
+                                <div className="flex items-center space-x-2">
+                                    <label htmlFor="endDate" className="text-gray-700 text-sm sm:text-base">結束日期 (YYYYMMDD):</label>
+                                    <input
+                                        type="text"
+                                        id="endDate"
+                                        className={`p-2 sm:p-3 border rounded-lg w-full text-sm sm:text-base ${dateFilterEnabled ? 'border-gray-300 bg-white' : 'bg-gray-100 border-gray-200 cursor-not-allowed'} focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm`}
+                                        value={endDate}
+                                        onChange={(e) => setEndDate(e.target.value)}
+                                        disabled={!dateFilterEnabled}
+                                        placeholder="20231231"
+                                        title="請輸入YYYYMMDD 格式的日期，例如 20231231"
+                                    />
+                                </div>
                             </div>
-                            <div className="flex items-center space-x-2">
-                                <label htmlFor="startDate" className="text-gray-700">開始日期 (YYYYMMDD):</label>
+
+                            {/* 排行項目與數量 */}
+                            <div className="flex flex-col space-y-2 sm:space-y-3">
+                                <label htmlFor="rankingField" className="text-gray-700 text-base sm:text-lg">排行項目:</label>
+                                <select
+                                    id="rankingField"
+                                    value={rankingField}
+                                    onChange={handleRankingFieldChange}
+                                    className={`p-2 sm:p-3 border rounded-lg w-full text-sm sm:text-base ${trendAnalysisType !== "無" ? 'bg-gray-100 border-gray-200 cursor-not-allowed' : 'border-gray-300 bg-white'} focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm`}
+                                    disabled={trendAnalysisType !== "無"}
+                                    title="選擇您希望分析的播放記錄類型"
+                                >
+                                    {Object.values(FIELD_MAPPING).map(([key, name]) => (
+                                        <option key={key} value={name}>{name}</option>
+                                    ))}
+                                </select>
+                                <label htmlFor="numResults" className="text-gray-700 text-base sm:text-lg">顯示數量:</label>
                                 <input
                                     type="text"
-                                    id="startDate"
-                                    className={`p-3 border rounded-lg w-full ${dateFilterEnabled ? 'border-gray-300 bg-white' : 'bg-gray-100 border-gray-200 cursor-not-allowed'} focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm`}
-                                    value={startDate}
-                                    onChange={(e) => setStartDate(e.target.value)}
-                                    disabled={!dateFilterEnabled}
-                                    placeholder="20230101"
-                                    title="請輸入YYYYMMDD 格式的日期，例如 20230101"
+                                    id="numResults"
+                                    className="p-2 sm:p-3 border border-gray-300 rounded-lg w-full text-sm sm:text-base focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm"
+                                    value={numResults}
+                                    onChange={(e) => {
+                                        const value = e.target.value;
+                                        if (value.toLowerCase() === 'all' || value === '' || /^\d+$/.test(value)) {
+                                            setNumResults(value);
+                                        }
+                                    }}
+                                    placeholder="all"
+                                    title="輸入數字顯示前 N 個結果，或輸入 'all' 顯示所有結果"
                                 />
                             </div>
-                            <div className="flex items-center space-x-2">
-                                <label htmlFor="endDate" className="text-gray-700">結束日期 (YYYYMMDD):</label>
-                                <input
-                                    type="text"
-                                    id="endDate"
-                                    className={`p-3 border rounded-lg w-full ${dateFilterEnabled ? 'border-gray-300 bg-white' : 'bg-gray-100 border-gray-200 cursor-not-allowed'} focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm`}
-                                    value={endDate}
-                                    onChange={(e) => setEndDate(e.target.value)}
-                                    disabled={!dateFilterEnabled}
-                                    placeholder="20231231"
-                                    title="請輸入YYYYMMDD 格式的日期，例如 20231231"
-                                />
+
+                            {/* 排行標準 */}
+                            <div className="flex flex-col space-y-2 sm:space-y-3">
+                                <span className="text-gray-700 text-base sm:text-lg">排行標準:</span>
+                                <div className="flex flex-col space-y-1 sm:space-y-2">
+                                    <label className="inline-flex items-center">
+                                        <input
+                                            type="radio"
+                                            className="form-radio text-indigo-600 h-4 w-4 sm:h-5 sm:w-5"
+                                            name="rankMetric"
+                                            value="count"
+                                            checked={rankMetric === "count"}
+                                            onChange={(e) => setRankMetric(e.target.value)}
+                                            disabled={trendAnalysisType !== "無"}
+                                        />
+                                        <span className="ml-2 text-gray-700 text-sm sm:text-base">播放次數</span>
+                                    </label>
+                                    <label className="inline-flex items-center">
+                                        <input
+                                            type="radio"
+                                            className="form-radio text-indigo-600 h-4 w-4 sm:h-5 sm:w-5"
+                                            name="rankMetric"
+                                            value="duration"
+                                            checked={rankMetric === "duration"}
+                                            onChange={(e) => setRankMetric(e.target.value)}
+                                            disabled={trendAnalysisType !== "無"}
+                                        />
+                                        <span className="ml-2 text-gray-700 text-sm sm:text-base">總播放時長</span>
+                                    </label>
+                                    <label className="inline-flex items-center">
+                                        <input
+                                            type="radio"
+                                            className="form-radio text-indigo-600 h-4 w-4 sm:h-5 sm:w-5"
+                                            name="rankMetric"
+                                            value="avg_duration"
+                                            checked={rankMetric === "avg_duration"}
+                                            onChange={(e) => setRankMetric(e.target.value)}
+                                            disabled={trendAnalysisType !== "無"}
+                                        />
+                                        <span className="ml-2 text-gray-700 text-sm sm:text-base">平均播放時長</span>
+                                    </label>
+                                </div>
+                                {/* 趨勢分析選項 */}
+                                <label htmlFor="trendAnalysis" className="text-gray-700 text-base sm:text-lg mt-3 sm:mt-4">趨勢分析:</label>
+                                <select
+                                    id="trendAnalysis"
+                                    value={trendAnalysisType}
+                                    onChange={handleTrendAnalysisChange}
+                                    className="p-2 sm:p-3 border border-gray-300 rounded-lg w-full text-sm sm:text-base focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm"
+                                    title="選擇您希望進行的趨勢分析類型"
+                                >
+                                    {Object.values(TREND_ANALYSIS_TYPES).map((type) => (
+                                        <option key={type} value={type}>{type}</option>
+                                    ))}
+                                </select>
                             </div>
                         </div>
 
-                        {/* 排行項目與數量 */}
-                        <div className="flex flex-col space-y-3">
-                            <label htmlFor="rankingField" className="text-gray-700 text-lg">排行項目:</label>
-                            <select
-                                id="rankingField"
-                                value={rankingField}
-                                onChange={handleRankingFieldChange}
-                                className={`p-3 border rounded-lg w-full ${trendAnalysisType !== "無" ? 'bg-gray-100 border-gray-200 cursor-not-allowed' : 'border-gray-300 bg-white'} focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm`}
-                                disabled={trendAnalysisType !== "無"}
-                                title="選擇您希望分析的播放記錄類型"
-                            >
-                                {Object.values(FIELD_MAPPING).map(([key, name]) => (
-                                    <option key={key} value={name}>{name}</option>
-                                ))}
-                            </select>
-                            <label htmlFor="numResults" className="text-gray-700 text-lg">顯示數量:</label>
+                        {/* 主結果搜尋框 */}
+                        <div className="flex flex-col md:flex-row items-center space-y-3 md:space-y-0 md:space-x-4 mt-4 sm:mt-6">
+                            <label htmlFor="mainSearch" className="text-gray-700 text-base sm:text-lg flex-shrink-0">搜尋結果 (歌曲/專輯):</label>
                             <input
                                 type="text"
-                                id="numResults"
-                                className="p-3 border border-gray-300 rounded-lg w-full focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm"
-                                value={numResults}
-                                onChange={(e) => {
-                                    const value = e.target.value;
-                                    if (value.toLowerCase() === 'all' || value === '' || /^\d+$/.test(value)) {
-                                        setNumResults(value);
-                                    }
-                                }}
-                                placeholder="all"
-                                title="輸入數字顯示前 N 個結果，或輸入 'all' 顯示所有結果"
+                                id="mainSearch"
+                                className={`flex-grow p-2 sm:p-3 border rounded-lg text-sm sm:text-base ${mainSearchEnabled ? 'border-gray-300 bg-white' : 'bg-gray-100 border-gray-200 cursor-not-allowed'} focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm`}
+                                value={mainSearchTerm}
+                                onChange={(e) => setMainSearchTerm(e.target.value)}
+                                disabled={!mainSearchEnabled}
+                                placeholder="輸入關鍵字搜尋..."
                             />
-                        </div>
-
-                        {/* 排行標準 */}
-                        <div className="flex flex-col space-y-3">
-                            <span className="text-gray-700 text-lg">排行標準:</span>
-                            <div className="flex flex-col space-y-2">
-                                <label className="inline-flex items-center">
-                                    <input
-                                        type="radio"
-                                        className="form-radio text-indigo-600 h-5 w-5"
-                                        name="rankMetric"
-                                        value="count"
-                                        checked={rankMetric === "count"}
-                                        onChange={(e) => setRankMetric(e.target.value)}
-                                        disabled={trendAnalysisType !== "無"}
-                                    />
-                                    <span className="ml-2 text-gray-700">播放次數</span>
-                                </label>
-                                <label className="inline-flex items-center">
-                                    <input
-                                        type="radio"
-                                        className="form-radio text-indigo-600 h-5 w-5"
-                                        name="rankMetric"
-                                        value="duration"
-                                        checked={rankMetric === "duration"}
-                                        onChange={(e) => setRankMetric(e.target.value)}
-                                        disabled={trendAnalysisType !== "無"}
-                                    />
-                                    <span className="ml-2 text-gray-700">總播放時長</span>
-                                </label>
-                                <label className="inline-flex items-center">
-                                    <input
-                                        type="radio"
-                                        className="form-radio text-indigo-600 h-5 w-5"
-                                        name="rankMetric"
-                                        value="avg_duration"
-                                        checked={rankMetric === "avg_duration"}
-                                        onChange={(e) => setRankMetric(e.target.value)}
-                                        disabled={trendAnalysisType !== "無"}
-                                    />
-                                    <span className="ml-2 text-gray-700">平均播放時長</span>
-                                </label>
-                            </div>
-                            {/* 趨勢分析選項 */}
-                            <label htmlFor="trendAnalysis" className="text-gray-700 text-lg mt-4">趨勢分析:</label>
-                            <select
-                                id="trendAnalysis"
-                                value={trendAnalysisType}
-                                onChange={handleTrendAnalysisChange}
-                                className="p-3 border border-gray-300 rounded-lg w-full focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm"
-                                title="選擇您希望進行的趨勢分析類型"
+                            <button
+                                onClick={filterMainResults}
+                                className={`px-4 py-2 sm:px-6 sm:py-3 bg-gradient-to-r from-blue-500 to-blue-700 text-white rounded-xl shadow-lg hover:from-blue-600 hover:to-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95 text-sm sm:text-base ${!mainSearchEnabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                disabled={!mainSearchEnabled}
                             >
-                                {Object.values(TREND_ANALYSIS_TYPES).map((type) => (
-                                    <option key={type} value={type}>{type}</option>
-                                ))}
-                            </select>
+                                搜尋
+                            </button>
+                            <button
+                                onClick={clearMainSearch}
+                                className={`px-4 py-2 sm:px-6 sm:py-3 bg-gradient-to-r from-gray-400 to-gray-600 text-gray-900 rounded-xl shadow-lg hover:from-gray-500 hover:to-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95 text-sm sm:text-base ${!mainSearchEnabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                disabled={!mainSearchEnabled}
+                            >
+                                清除搜尋
+                            </button>
                         </div>
                     </div>
 
-                    {/* 主結果搜尋框 */}
-                    <div className="flex flex-col md:flex-row items-center space-y-3 md:space-y-0 md:space-x-4 mt-6">
-                        <label htmlFor="mainSearch" className="text-gray-700 text-lg flex-shrink-0">搜尋結果 (歌曲/專輯):</label>
-                        <input
-                            type="text"
-                            id="mainSearch"
-                            className={`flex-grow p-3 border rounded-lg ${mainSearchEnabled ? 'border-gray-300 bg-white' : 'bg-gray-100 border-gray-200 cursor-not-allowed'} focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm`}
-                            value={mainSearchTerm}
-                            onChange={(e) => setMainSearchTerm(e.target.value)}
-                            disabled={!mainSearchEnabled}
-                            placeholder="輸入關鍵字搜尋..."
-                        />
+                    {/* 操作按鈕 */}
+                    <div className="mb-6 sm:mb-8 flex flex-col md:flex-row justify-center space-y-3 md:space-y-0 md:space-x-6">
                         <button
-                            onClick={filterMainResults}
-                            className={`px-6 py-3 bg-gradient-to-r from-blue-500 to-blue-700 text-white rounded-xl shadow-lg hover:from-blue-600 hover:to-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95 ${!mainSearchEnabled ? 'opacity-50 cursor-not-allowed' : ''}`}
-                            disabled={!mainSearchEnabled}
+                            onClick={analyzeData}
+                            className="px-6 py-3 sm:px-8 sm:py-4 bg-gradient-to-r from-green-600 to-emerald-700 text-white font-semibold rounded-2xl shadow-xl hover:from-green-700 hover:to-emerald-800 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95 text-base sm:text-lg"
                         >
-                            搜尋
+                            開始分析
                         </button>
                         <button
-                            onClick={clearMainSearch}
-                            className={`px-6 py-3 bg-gradient-to-r from-gray-400 to-gray-600 text-gray-900 rounded-xl shadow-lg hover:from-gray-500 hover:to-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95 ${!mainSearchEnabled ? 'opacity-50 cursor-not-allowed' : ''}`}
-                            disabled={!mainSearchEnabled}
-                        >
-                            清除搜尋
-                        </button>
-                    </div>
-                </div>
-
-                {/* 操作按鈕 */}
-                <div className="mb-8 flex flex-col md:flex-row justify-center space-y-4 md:space-y-0 md:space-x-6">
-                    <button
-                        onClick={analyzeData}
-                        className="px-8 py-4 bg-gradient-to-r from-green-600 to-emerald-700 text-white font-semibold rounded-2xl shadow-xl hover:from-green-700 hover:to-emerald-800 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95"
-                    >
-                        開始分析
-                    </button>
-                    <button
-                        onClick={exportToCsv}
-                        className="px-8 py-4 bg-gradient-to-r from-purple-600 to-indigo-700 text-white font-semibold rounded-2xl shadow-xl hover:from-purple-700 hover:to-indigo-800 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95"
-                        disabled={currentlyDisplayedRankedItems.length === 0}
-                    >
-                        匯出 CSV
-                    </button>
-                    <button
-                        onClick={resetAppState}
-                        className="px-8 py-4 bg-gradient-to-r from-red-600 to-rose-700 text-white font-semibold rounded-2xl shadow-xl hover:from-red-700 hover:to-rose-800 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95"
-                        title="清除所有載入的數據和篩選條件，重設應用程式狀態"
-                    >
-                        重設
-                    </button>
-                </div>
-
-                {/* Gemini AI 主介面按鈕 */}
-                <div className="mb-8 p-6 border border-gray-200 rounded-2xl bg-gray-50 shadow-md flex justify-center gap-6">
-                    <button
-                        onClick={triggerGeminiAnalysis}
-                        className="px-8 py-4 bg-gradient-to-r from-blue-600 to-cyan-700 text-white font-semibold rounded-2xl shadow-xl hover:from-blue-700 hover:to-cyan-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95"
-                        disabled={currentlyDisplayedRankedItems.length === 0}
-                    >
-                        ✨ 分析結果洞察
-                    </button>
-                    {rankingField === FIELD_MAPPING[1][1] && (
-                        <button
-                            onClick={() => setIsRecommendationChoiceModalOpen(true)} // Open the choice modal
-                            className="px-8 py-4 bg-gradient-to-r from-pink-600 to-red-700 text-white font-semibold rounded-2xl shadow-xl hover:from-pink-700 hover:to-red-800 focus:outline-none focus:ring-2 focus:ring-pink-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95"
+                            onClick={exportToCsv}
+                            className="px-6 py-3 sm:px-8 sm:py-4 bg-gradient-to-r from-purple-600 to-indigo-700 text-white font-semibold rounded-2xl shadow-xl hover:from-purple-700 hover:to-indigo-800 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95 text-base sm:text-lg"
                             disabled={currentlyDisplayedRankedItems.length === 0}
                         >
-                            ✨ Gemini 推薦歌單
+                            匯出 CSV
                         </button>
-                    )}
-                </div>
+                        <button
+                            onClick={resetAppState}
+                            className="px-6 py-3 sm:px-8 sm:py-4 bg-gradient-to-r from-red-600 to-rose-700 text-white font-semibold rounded-2xl shadow-xl hover:from-red-700 hover:to-rose-800 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95 text-base sm:text-lg"
+                            title="清除所有載入的數據和篩選條件，重設應用程式狀態"
+                        >
+                            重設
+                        </button>
+                    </div>
 
-                {/* 結果顯示區 */}
-                <div className="p-6 border border-gray-200 rounded-2xl bg-gray-50 shadow-md flex flex-col min-h-[350px]">
-                    <h2 className="text-2xl font-semibold text-gray-700 mb-4">分析結果 (雙擊「單曲」、「歌曲名稱-歌手」、「專輯」或「歌手」項目可查看詳細資料)</h2>
-                    <div className="flex-grow overflow-auto rounded-xl border border-gray-300 shadow-inner">
-                        <table className="treeview-table">
-                            <thead>
-                                {trendAnalysisType === "無" ? (
-                                    <tr>
-                                        <th className="w-16">排名</th>
-                                        {currentFieldToRankKey === "master_metadata_track_name" && (
-                                            <>
-                                                <th className="w-64">歌曲名稱</th>
-                                                <th className="w-40">歌手</th>
-                                            </>
-                                        )}
-                                        {currentFieldToRankKey === "master_metadata_album_album_name" && (
-                                            <>
-                                                <th className="w-64">專輯名稱</th>
-                                                <th className="w-40">歌手</th>
-                                            </>
-                                        )}
-                                        {currentFieldToRankKey === "spotify_track_uri" && (
-                                            <th className="w-80">單曲 (URI)</th>
-                                        )}
-                                        {currentFieldToRankKey === "master_metadata_album_artist_name" && (
-                                            <th className="w-64">歌手</th>
-                                        )}
-                                        {currentFieldToRankKey === "ms_played" && (
-                                            <th className="w-80">歌曲/專輯/URI</th>
-                                        )}
-                                        {!["master_metadata_track_name", "master_metadata_album_album_name", "spotify_track_uri", "master_metadata_album_artist_name", "ms_played"].includes(currentFieldToRankKey) && (
-                                            <th className="w-64">{rankingField.split(" - ")[0]}</th>
-                                        )}
+                    {/* Gemini AI 主介面按鈕 */}
+                    <div className="mb-6 sm:mb-8 p-4 sm:p-6 border border-gray-200 rounded-2xl bg-gray-50 shadow-md flex flex-col sm:flex-row justify-center gap-3 sm:gap-6">
+                        <button
+                            onClick={triggerGeminiAnalysis}
+                            className="px-6 py-3 sm:px-8 sm:py-4 bg-gradient-to-r from-blue-600 to-cyan-700 text-white font-semibold rounded-2xl shadow-xl hover:from-blue-700 hover:to-cyan-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95 text-base sm:text-lg"
+                            disabled={currentlyDisplayedRankedItems.length === 0}
+                        >
+                            ✨ 分析結果洞察
+                        </button>
+                        {rankingField === FIELD_MAPPING[1][1] && (
+                            <button
+                                onClick={() => setIsRecommendationChoiceModalOpen(true)} // Open the choice modal
+                                className="px-6 py-3 sm:px-8 sm:py-4 bg-gradient-to-r from-pink-600 to-red-700 text-white font-semibold rounded-2xl shadow-xl hover:from-pink-700 hover:to-red-800 focus:outline-none focus:ring-2 focus:ring-pink-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95 text-base sm:text-lg"
+                                disabled={currentlyDisplayedRankedItems.length === 0}
+                            >
+                                ✨ Gemini 推薦歌單
+                            </button>
+                        )}
+                    </div>
 
-                                        {rankMetric === "count" && <th className="w-40 text-right">次數</th>}
-                                        {rankMetric === "duration" && <th className="w-40 text-right">總時長</th>}
-                                        {rankMetric === "avg_duration" && <th className="w-40 text-right">平均時長</th>}
+                    {/* 結果顯示區 */}
+                    <div className="p-4 sm:p-6 border border-gray-200 rounded-2xl bg-gray-50 shadow-md flex flex-col min-h-[350px]">
+                        <h2 className="text-xl sm:text-2xl font-semibold text-gray-700 mb-3 sm:mb-4">分析結果 (單擊「單曲」、「歌曲名稱-歌手」、「專輯」或「歌手」項目可查看詳細資料)</h2>
+                        <div className="flex-grow overflow-auto rounded-xl border border-gray-300 shadow-inner">
+                            <table className="treeview-table text-xs sm:text-sm">
+                                <thead>
+                                    {trendAnalysisType === "無" ? (
+                                        <tr>
+                                            <th className="w-16 px-2 py-2 sm:px-4 sm:py-3">排名</th>
+                                            {currentFieldToRankKey === "master_metadata_track_name" && (
+                                                <>
+                                                    <th className="w-64 px-2 py-2 sm:px-4 sm:py-3">歌曲名稱</th>
+                                                    <th className="w-40 px-2 py-2 sm:px-4 sm:py-3">歌手</th>
+                                                </>
+                                            )}
+                                            {currentFieldToRankKey === "master_metadata_album_album_name" && (
+                                                <>
+                                                    <th className="w-64 px-2 py-2 sm:px-4 sm:py-3">專輯名稱</th>
+                                                    <th className="w-40 px-2 py-2 sm:px-4 sm:py-3">歌手</th>
+                                                </>
+                                            )}
+                                            {currentFieldToRankKey === "spotify_track_uri" && (
+                                                <th className="w-80 px-2 py-2 sm:px-4 sm:py-3">單曲 (URI)</th>
+                                            )}
+                                            {currentFieldToRankKey === "master_metadata_album_artist_name" && (
+                                                <th className="w-64 px-2 py-2 sm:px-4 sm:py-3">歌手</th>
+                                            )}
+                                            {currentFieldToRankKey === "ms_played" && (
+                                                <th className="w-80 px-2 py-2 sm:px-4 sm:py-3">歌曲/專輯/URI</th>
+                                            )}
+                                            {!["master_metadata_track_name", "master_metadata_album_album_name", "spotify_track_uri", "master_metadata_album_artist_name", "ms_played"].includes(currentFieldToRankKey) && (
+                                                <th className="w-64 px-2 py-2 sm:px-4 sm:py-3">{rankingField.split(" - ")[0]}</th>
+                                            )}
 
-                                        {(rankMetric !== "duration" || currentFieldToRankKey === "ms_played") && <th className="w-40 text-right">總時長(輔助)</th>}
-                                        {(rankMetric !== "avg_duration" || currentFieldToRankKey === "ms_played") && <th className="w-40 text-right">平均時長(輔助)</th>}
-                                        {currentFieldToRankKey !== "ms_played" && rankMetric !== "count" && <th className="w-40 text-right">播放次數(輔助)</th>}
-                                    </tr>
-                                ) : (
-                                    <tr>
-                                        <th className="w-40">月份</th>
-                                        {trendAnalysisType === TREND_ANALYSIS_TYPES.monthly_total_duration && (
-                                            <>
-                                                <th className="w-64 text-right">總收聽時長</th>
-                                            </>
-                                        )}
-                                        {trendAnalysisType === TREND_ANALYSIS_TYPES.monthly_top_songs && (
-                                            <th className="w-full">每月熱門歌曲 (前{parseInt(numResults, 10) || 5}名)</th>
-                                        )}
-                                        {trendAnalysisType === TREND_ANALYSIS_TYPES.monthly_top_artists && (
-                                            <th className="w-full">每月熱門歌手 (前{parseInt(numResults, 10) || 5}名)</th>
-                                        )}
-                                    </tr>
-                                )}
-                            </thead>
-                            <tbody>
-                                {currentlyDisplayedRankedItems.length === 0 && (
-                                    <tr>
-                                        <td colSpan="100%" className="px-4 py-4 text-center text-gray-500">
-                                            沒有數據可顯示。請選擇 JSON 檔案並點擊「開始分析」。
-                                        </td>
-                                    </tr>
-                                )}
-                                {currentlyDisplayedRankedItems.map((item, index) => {
-                                    if (trendAnalysisType !== "無") {
-                                        return (
-                                            <tr key={index} className="hover:bg-gray-100">
-                                                <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{item[0]}</td>
-                                                <td className="px-4 py-2 whitespace-normal text-sm text-gray-800">
-                                                    {trendAnalysisType === TREND_ANALYSIS_TYPES.monthly_total_duration ? item[1] : item[1]}
-                                                </td>
-                                            </tr>
-                                        );
-                                    } else {
-                                        const [item_data, primary_metric, total_ms, count] = item;
-                                        const rankNum = index + 1;
+                                            {rankMetric === "count" && <th className="w-40 px-2 py-2 sm:px-4 sm:py-3 text-right">次數</th>}
+                                            {rankMetric === "duration" && <th className="w-40 px-2 py-2 sm:px-4 sm:py-3 text-right">總時長</th>}
+                                            {rankMetric === "avg_duration" && <th className="w-40 px-2 py-2 sm:px-4 sm:py-3 text-right">平均時長</th>}
 
-                                        let primaryMetricDisplay = primary_metric;
-                                        if (rankMetric === "duration" || rankMetric === "avg_duration") {
-                                            primaryMetricDisplay = formatMsToMinSec(primary_metric);
-                                        }
-                                        const totalDurationStr = formatMsToMinSec(total_ms);
-                                        const avgDurationStr = formatMsToMinSec(item[4]);
-
-                                        let displayCells = [
-                                            <td key="rank" className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-center">{rankNum}</td>
-                                        ];
-
-                                        if (currentFieldToRankKey === "master_metadata_track_name" ||
-                                            currentFieldToRankKey === "master_metadata_album_album_name") {
-                                            const [name, artist] = item_data.split(' - ');
-                                            displayCells.push(
-                                                <td key="name" className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{name}</td>,
-                                                <td key="artist" className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{artist}</td>
-                                            );
-                                        } else if (currentFieldToRankKey === "spotify_track_uri" || currentFieldToRankKey === "master_metadata_album_artist_name" ||
-                                            (!["master_metadata_track_name", "master_metadata_album_album_name", "ms_played"].includes(currentFieldToRankKey))) {
-                                            displayCells.push(
-                                                <td key="item" className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{String(item_data)}</td>
-                                            );
-                                        } else if (currentFieldToRankKey === "ms_played") {
-                                            displayCells.push(
-                                                <td key="item" className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{String(item_data)}</td>
-                                            );
-                                        }
-
-                                        if (currentFieldToRankKey === "ms_played") {
-                                            displayCells.push(
-                                                <td key="primary_metric" className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-right">{formatMsToMinSec(primary_metric)}</td>,
-                                                <td key="count_aux" className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-right">{count}</td>,
-                                                <td key="avg_duration_aux" className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-right">{avgDurationStr}</td>
+                                            {(rankMetric !== "duration" || currentFieldToRankKey === "ms_played") && <th className="w-40 px-2 py-2 sm:px-4 sm:py-3 text-right">總時長(輔助)</th>}
+                                            {(rankMetric !== "avg_duration" || currentFieldToRankKey === "ms_played") && <th className="w-40 px-2 py-2 sm:px-4 sm:py-3 text-right">平均時長(輔助)</th>}
+                                            {currentFieldToRankKey !== "ms_played" && rankMetric !== "count" && <th className="w-40 px-2 py-2 sm:px-4 sm:py-3 text-right">播放次數(輔助)</th>}
+                                        </tr>
+                                    ) : (
+                                        <tr>
+                                            <th className="w-40 px-2 py-2 sm:px-4 sm:py-3">月份</th>
+                                            {trendAnalysisType === TREND_ANALYSIS_TYPES.monthly_total_duration && (
+                                                <>
+                                                    <th className="w-64 px-2 py-2 sm:px-4 sm:py-3 text-right">總收聽時長</th>
+                                                </>
+                                            )}
+                                            {trendAnalysisType === TREND_ANALYSIS_TYPES.monthly_top_songs && (
+                                                <th className="w-full px-2 py-2 sm:px-4 sm:py-3">每月熱門歌曲 (前{parseInt(numResults, 10) || 5}名)</th>
+                                            )}
+                                            {trendAnalysisType === TREND_ANALYSIS_TYPES.monthly_top_artists && (
+                                                <th className="w-full px-2 py-2 sm:px-4 sm:py-3">每月熱門歌手 (前{parseInt(numResults, 10) || 5}名)</th>
+                                            )}
+                                        </tr>
+                                    )}
+                                </thead>
+                                <tbody>
+                                    {currentlyDisplayedRankedItems.length === 0 && (
+                                        <tr>
+                                            <td colSpan="100%" className="px-4 py-4 text-center text-gray-500 text-sm sm:text-base">
+                                                沒有數據可顯示。請選擇 JSON 檔案並點擊「開始分析」。
+                                            </td>
+                                        </tr>
+                                    )}
+                                    {currentlyDisplayedRankedItems.map((item, index) => {
+                                        if (trendAnalysisType !== "無") {
+                                            return (
+                                                <tr key={index} className="hover:bg-gray-100">
+                                                    <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-800">{item[0]}</td>
+                                                    <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-normal text-xs sm:text-sm text-gray-800">
+                                                        {trendAnalysisType === TREND_ANALYSIS_TYPES.monthly_total_duration ? item[1] : item[1]}
+                                                    </td>
+                                                </tr>
                                             );
                                         } else {
-                                            displayCells.push(
-                                                <td key="primary_metric" className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-right">{primaryMetricDisplay}</td>
-                                            );
-                                            // Conditional auxiliary columns
-                                            if (rankMetric !== "duration") {
-                                                displayCells.push(<td key="total_duration_aux" className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-right">{totalDurationStr}</td>);
-                                            }
-                                            if (rankMetric !== "avg_duration") {
-                                                displayCells.push(<td key="avg_duration_aux" className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-right">{avgDurationStr}</td>);
-                                            }
-                                            if (rankMetric !== "count") {
-                                                displayCells.push(<td key="count_aux" className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-right">{count}</td>);
-                                            }
-                                        }
+                                            const [item_data, primary_metric, total_ms, count] = item;
+                                            const rankNum = index + 1;
 
-                                        return (
-                                            <tr key={index} className="hover:bg-gray-100 cursor-pointer" onDoubleClick={() => showListeningDetails(index)}>
-                                                {displayCells}
-                                            </tr>
-                                        );
-                                    }
-                                })}
-                            </tbody>
-                        </table>
+                                            let primaryMetricDisplay = primary_metric;
+                                            if (rankMetric === "duration" || rankMetric === "avg_duration") {
+                                                primaryMetricDisplay = formatMsToMinSec(primary_metric);
+                                            }
+                                            const totalDurationStr = formatMsToMinSec(total_ms);
+                                            const avgDurationStr = formatMsToMinSec(item[4]);
+
+                                            let displayCells = [
+                                                <td key="rank" className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-800 text-center">{rankNum}</td>
+                                            ];
+
+                                            if (currentFieldToRankKey === "master_metadata_track_name" ||
+                                                currentFieldToRankKey === "master_metadata_album_album_name") {
+                                                const [name, artist] = item_data.split(' - ');
+                                                displayCells.push(
+                                                    <td key="name" className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-800">{name}</td>,
+                                                    <td key="artist" className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-800">{artist}</td>
+                                                );
+                                            } else if (currentFieldToRankKey === "spotify_track_uri" || currentFieldToRankKey === "master_metadata_album_artist_name" ||
+                                                (!["master_metadata_track_name", "master_metadata_album_album_name", "ms_played"].includes(currentFieldToRankKey))) {
+                                                displayCells.push(
+                                                    <td key="item" className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-800">{String(item_data)}</td>
+                                                );
+                                            } else if (currentFieldToRankKey === "ms_played") {
+                                                displayCells.push(
+                                                    <td key="item" className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-800">{String(item_data)}</td>
+                                                );
+                                            }
+
+                                            if (currentFieldToRankKey === "ms_played") {
+                                                displayCells.push(
+                                                    <td key="primary_metric" className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-800 text-right">{formatMsToMinSec(primary_metric)}</td>,
+                                                    <td key="count_aux" className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-800 text-right">{count}</td>,
+                                                    <td key="avg_duration_aux" className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-800 text-right">{avgDurationStr}</td>
+                                                );
+                                            } else {
+                                                displayCells.push(
+                                                    <td key="primary_metric" className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-800 text-right">{primaryMetricDisplay}</td>
+                                                );
+                                                // Conditional auxiliary columns
+                                                if (rankMetric !== "duration") {
+                                                    displayCells.push(<td key="total_duration_aux" className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-800 text-right">{totalDurationStr}</td>);
+                                                }
+                                                if (rankMetric !== "avg_duration") {
+                                                    displayCells.push(<td key="avg_duration_aux" className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-800 text-right">{avgDurationStr}</td>);
+                                                }
+                                                if (rankMetric !== "count") {
+                                                    displayCells.push(<td key="count_aux" className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-800 text-right">{count}</td>);
+                                                }
+                                            }
+
+                                            return (
+                                                <tr key={index} className="hover:bg-gray-100 cursor-pointer" onClick={() => showListeningDetails(index)}>
+                                                    {displayCells}
+                                                </tr>
+                                            );
+                                        }
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div className="mt-4 sm:mt-6 text-center text-gray-600 text-xs sm:text-sm">
+                        {status}
                     </div>
                 </div>
+            )}
 
-                <div className="mt-6 text-center text-gray-600 text-sm">
-                    {status}
-                </div>
-            </div>
+            {currentPage === 'how-to-use' && (
+                <HowToUse onBack={() => setCurrentPage('analyzer')} />
+            )}
+
+            {currentPage === 'recap' && (
+                <RecapPage data={recapData} isLoading={isRecapLoading} onBack={() => setCurrentPage('analyzer')} />
+            )}
+
+            {/* Recap Date Select Modal */}
+            <RecapDateSelectModal
+                isOpen={isRecapDateSelectModalOpen}
+                onClose={() => setIsRecapDateSelectModalOpen(false)}
+                onConfirm={handleRecapGeneration}
+                initialStartDate={startDate} // Use existing startDate/endDate state for initial values
+                initialEndDate={endDate}
+                onStartDateChange={setStartDate}
+                onEndDateChange={setEndDate}
+                onApplyAllDataChange={setDateFilterEnabled} // Reuse dateFilterEnabled to control "apply all data" for Recap
+                applyAllData={dateFilterEnabled} // Use the same state
+            />
 
             <DetailModal
                 isOpen={isDetailModalOpen}
@@ -2000,12 +2719,17 @@ const App = () => {
                 onSearch={() => {
                     setDetailSearchTerm(detailSearchTerm);
                 }}
-                onClearSearch={() => setDetailSearchTerm("")}
+                onClearSearch={() => {
+                    setDetailSearchTerm("");
+                    setYoutubeVideoId(null); // Clear video when search is cleared
+                }}
                 onExport={() => exportDetailRecordsToCsv(detailRecords, detailModalTitle, detailMaxPlayTimes)}
                 searchLyricsOnline={searchLyricsOnline}
                 searchAlbumReviewOnline={searchAlbumReviewOnline}
                 searchArtistBioOnline={searchArtistBioOnline}
                 onSongInsight={(song, artist) => callGeminiAPI(`Given the song title '${song}' by '${artist}', provide a concise summary of its main themes, lyrical meaning, or general mood. Keep it under 150 words.`, `歌曲洞察: ${song}`)}
+                youtubeVideoId={youtubeVideoId} // Pass YouTube video ID
+                youtubeLoading={youtubeLoading} // Pass YouTube loading state
             />
 
             <ArtistModal
@@ -2018,6 +2742,7 @@ const App = () => {
                 onSongDoubleClick={handleArtistSongDoubleClick}
                 onArtistBioSearch={searchArtistBioOnline}
                 onArtistInsight={(artist) => callGeminiAPI(`Given the artist name '${artist}', provide a concise overview of their musical style, key influences, and overall impact on music. Keep it under 200 words.`, `歌手洞察: ${artist}`)}
+                isLoading={isArtistLoading} // Pass loading state to modal
             />
 
             <GeminiResponseModal
