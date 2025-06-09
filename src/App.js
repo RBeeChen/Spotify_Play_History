@@ -666,13 +666,19 @@ const App = () => {
             });
             const result = await response.json();
 
+            let extractedText = "";
             if (result.candidates && result.candidates.length > 0 &&
                 result.candidates[0].content && result.candidates[0].content.parts &&
-                result.candidates[0].content.parts.length > 0) {
-                let text = result.candidates[0].content.parts[0].text;
+                result.candidates[0].content.parts.length > 0 &&
+                typeof result.candidates[0].content.parts[0].text === 'string') {
+                extractedText = result.candidates[0].content.parts[0].text;
+            }
+
+            if (extractedText) { // Check if extractedText is not empty
+                let textToDisplay = extractedText;
                 if (isStructured) {
                     try {
-                        const parsedJson = JSON.parse(text);
+                        const parsedJson = JSON.parse(extractedText);
                         // Store the parsed JSON if it's recap data
                         if (title === "您的音樂回顧 (Recap)") {
                             setRecapData(parsedJson);
@@ -680,16 +686,27 @@ const App = () => {
                             setCurrentPage('recap'); // Switch to recap page
                             return; // Exit as we're handling recap data specifically
                         }
-                        text = JSON.stringify(parsedJson, null, 2); // Pretty print for other structured responses
+                        textToDisplay = JSON.stringify(parsedJson, null, 2); // Pretty print for other structured responses
                     } catch (parseError) {
-                        console.error("解析 Gemini 結構化輸出時發生錯誤:", parseError);
-                        text = `解析錯誤：${parseError.message}\n原始輸出:\n${text}`;
+                        console.error("解析 Gemini 結構化輸出時發生錯誤:", parseError, "原始輸出:", extractedText);
+                        textToDisplay = `解析錯誤：${parseError.message}\n原始輸出:\n${extractedText}`;
                     }
                 }
-                setGeminiModalContent(text);
+                setGeminiModalContent(textToDisplay);
             } else {
-                setGeminiModalContent("無法生成內容。可能是 API 響應格式不正確或內容缺失。");
-                console.error("Gemini API 響應格式錯誤:", result);
+                // More detailed error message based on what might be missing
+                let errorMessage = "無法生成內容。";
+                if (!result.candidates || result.candidates.length === 0) {
+                    errorMessage += "API 響應中缺少 'candidates'。";
+                } else if (!result.candidates[0].content || !result.candidates[0].content.parts || result.candidates[0].content.parts.length === 0) {
+                    errorMessage += "API 響應中缺少預期的內容結構。";
+                } else if (typeof result.candidates[0].content.parts[0].text !== 'string') {
+                    errorMessage += "API 響應中 'text' 內容格式不正確。";
+                } else {
+                    errorMessage += "API 響應的 'text' 內容為空。";
+                }
+                setGeminiModalContent(errorMessage);
+                console.error("Gemini API 響應格式錯誤或內容缺失:", result);
             }
         } catch (error) {
             setGeminiModalContent(`生成內容時發生錯誤: ${error.message}`);
