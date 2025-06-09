@@ -987,17 +987,28 @@ const App = () => {
                 if (recordDateStr) {
                     try {
                         const recordDate = new Date(recordDateStr.substring(0, 10)); //YYYY-MM-DD
-                        const startObj = dateFilterEnabled ? parseDateFromString(startDate) : null;
-                        const endObj = dateFilterEnabled ? parseDateFromString(endDate) : null;
-
-                        // FIX: Ensure these are null-safe
-                        const start_date_normalized = startObj ? new Date(startObj.getFullYear(), startObj.getMonth(), startObj.getDate()) : null;
-                        const end_date_normalized = endObj ? new Date(endObj.getFullYear(), endObj.getMonth(), endObj.getDate()) : null;
                         
-                        const item_date_normalized = new Date(recordDate.getFullYear(), recordDate.getMonth(), recordDate.getDate());
+                        let shouldAddRecord = true;
+                        if (dateFilterEnabled) {
+                            const startObj = parseDateFromString(startDate);
+                            const endObj = parseDateFromString(endDate);
 
-                        if ((!start_date_normalized || item_date_normalized >= start_date_normalized) &&
-                            (!end_date_normalized || item_date_normalized <= end_date_normalized)) {
+                            // Only proceed with date normalization if startObj and endObj are valid
+                            if (startObj && endObj) {
+                                const start_date_normalized = new Date(startObj.getFullYear(), startObj.getMonth(), startObj.getDate());
+                                const end_date_normalized = new Date(endObj.getFullYear(), endObj.getMonth(), endObj.getDate());
+                                const item_date_normalized = new Date(recordDate.getFullYear(), recordDate.getMonth(), recordDate.getDate());
+
+                                if (!(item_date_normalized >= start_date_normalized && item_date_normalized <= end_date_normalized)) {
+                                    shouldAddRecord = false;
+                                }
+                            } else {
+                                // If date filter is enabled but dates are invalid, don't add record
+                                shouldAddRecord = false;
+                            }
+                        }
+
+                        if (shouldAddRecord) {
                             tempRecordsForDetails.push(record);
                         }
                     } catch (e) {
@@ -1592,7 +1603,7 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
         return (
             <div ref={detailModalRef} className={`fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center p-4 z-50 transition-opacity duration-300 ${isOpen ? 'opacity-100 visible' : 'opacity-0 invisible'}`}>
                 {isOpen && ( // Conditionally render inner content only if modal is open
-                    <div className="bg-gradient-to-br from-purple-800 to-indigo-900 text-white rounded-xl sm:rounded-3xl shadow-2xl p-4 sm:p-8 w-full max-w-full sm:max-w-3xl md:max-w-4xl lg:max-w-5xl max-h-[95vh] flex flex-col transform scale-95 opacity-0 animate-fade-in-up">
+                    <div className="bg-gradient-to-br from-purple-800 to-indigo-900 text-white rounded-xl sm:rounded-3xl shadow-2xl p-4 sm:p-8 w-full max-w-full sm:max-w-3xl md:max-w-4xl lg:max-w-6xl max-h-[95vh] flex flex-col transform scale-95 opacity-0 animate-fade-in-up">
                         <style>{`
                             @keyframes fade-in-up {
                                 from { opacity: 0; transform: translateY(20px) scale(0.95); }
@@ -1669,78 +1680,85 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
                             )}
                         </div>
 
-                        {/* YouTube MV Section */}
-                        {youtubeLoading ? (
-                            <div className="flex justify-center items-center h-24 my-4 bg-gray-800 rounded-lg">
-                                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
-                                <span className="ml-3 text-lg text-gray-300">載入 MV 中...</span>
+                        {/* YouTube MV and Details Table - Side-by-side on larger screens */}
+                        <div className="flex flex-col md:flex-row flex-grow overflow-hidden gap-4 sm:gap-6 mb-4">
+                            {/* YouTube MV Section */}
+                            <div className="w-full md:w-1/2 flex flex-col">
+                                {youtubeLoading ? (
+                                    <div className="flex justify-center items-center h-48 my-4 bg-gray-800 rounded-lg">
+                                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+                                        <span className="ml-3 text-lg text-gray-300">載入 MV 中...</span>
+                                    </div>
+                                ) : youtubeVideoId ? (
+                                    <div className="flex flex-col items-center my-4">
+                                        <h3 className="text-xl font-semibold mb-3 text-gray-200">YouTube MV</h3>
+                                        <div className="relative w-full overflow-hidden rounded-xl" style={{ paddingTop: '56.25%' /* 16:9 Aspect Ratio */ }}>
+                                            <iframe
+                                                className="absolute top-0 left-0 w-full h-full"
+                                                src={`https://www.youtube.com/embed/${youtubeVideoId}`}
+                                                title="YouTube video player"
+                                                frameBorder="0"
+                                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                                allowFullScreen
+                                            ></iframe>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    item_name_for_web_search && artist_name_for_web_search && !youtubeLoading && (
+                                        <div className="text-center my-4 p-3 bg-gray-800 rounded-lg text-gray-400 text-sm">
+                                            此歌曲無 MV 或搜尋失敗。
+                                        </div>
+                                    )
+                                )}
                             </div>
-                        ) : youtubeVideoId ? (
-                            <div className="flex flex-col items-center my-4">
-                                <h3 className="text-xl font-semibold mb-3 text-gray-200">YouTube MV</h3>
-                                <div className="relative w-full overflow-hidden rounded-xl" style={{ paddingTop: '56.25%' /* 16:9 Aspect Ratio */ }}>
-                                    <iframe
-                                        className="absolute top-0 left-0 w-full h-full"
-                                        src={`https://www.youtube.com/embed/${youtubeVideoId}`}
-                                        title="YouTube video player"
-                                        frameBorder="0"
-                                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                                        allowFullScreen
-                                    ></iframe>
-                                </div>
+
+                            {/* Detailed Records Table Section */}
+                            <div className="w-full md:w-1/2 flex-grow overflow-auto border border-gray-600 rounded-xl shadow-inner text-xs sm:text-sm">
+                                <h3 className="text-xl font-semibold mb-3 text-gray-200 p-2 sticky top-0 bg-gray-800 z-10 rounded-t-xl">詳細記錄</h3>
+                                <table className="min-w-full divide-y divide-gray-700">
+                                    <thead className="bg-gray-800 sticky top-0">
+                                        <tr>
+                                            {["播放時間 (UTC)", "播放平台", "播放時長 (分:秒)", "歌曲名稱", "歌手", "專輯名稱",
+                                                "播放完整度(%)", "開始原因", "結束原因", "隨機播放", "是否跳過", "離線播放", "隱身模式"].map(header => (
+                                                    <th key={header} className="px-2 py-2 sm:px-4 sm:py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">
+                                                        {header}
+                                                    </th>
+                                                ))}
+                                        </tr>
+                                    </thead>
+                                    <tbody className="bg-gray-900 divide-y divide-gray-700">
+                                        {filteredRecords.map((record, index) => {
+                                            const ms_played_int = getMsFromRecord(record.ms_played || 0);
+                                            const uri = record.spotify_track_uri;
+                                            let play_completion_percentage = "N/A";
+                                            if (maxPlayTimes && uri && maxPlayTimes[uri] > 0) {
+                                                const percentage = (ms_played_int / maxPlayTimes[uri]) * 100;
+                                                play_completion_percentage = `${percentage.toFixed(1)}%`;
+                                            }
+
+                                            return (
+                                                <tr key={index} className="hover:bg-gray-700 transition-colors duration-150 ease-in-out">
+                                                    <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.ts || 'N/A'}</td>
+                                                    <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.platform || 'N/A'}</td>
+                                                    <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200 text-right">{formatMsToMinSec(ms_played_int)}</td>
+                                                    <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.master_metadata_track_name || 'N/A'}</td>
+                                                    <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.master_metadata_album_artist_name || 'N/A'}</td>
+                                                    <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.master_metadata_album_album_name || 'N/A'}</td>
+                                                    <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200 text-center">{play_completion_percentage}</td>
+                                                    <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.reason_start || 'N/A'}</td>
+                                                    <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.reason_end || 'N/A'}</td>
+                                                    <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.shuffle === true ? "是" : (record.shuffle === false ? "否" : "N/A")}</td>
+                                                    <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.skipped === true ? "是" : (record.skipped === false ? "否" : "N/A")}</td>
+                                                    <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.offline === true ? "是" : (record.offline === false ? "否" : "N/A")}</td>
+                                                    <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.incognito_mode === true ? "是" : (record.incognito_mode === false ? "否" : "N/A")}</td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
                             </div>
-                        ) : (
-                            item_name_for_web_search && artist_name_for_web_search && !youtubeLoading && ( // Only show "No MV" if it's a song and search was attempted
-                                <div className="text-center my-4 p-3 bg-gray-800 rounded-lg text-gray-400 text-sm">
-                                    此歌曲無 MV 或搜尋失敗。
-                                </div>
-                            )
-                        )}
-
-
-                        <div className="flex-grow overflow-auto border border-gray-600 rounded-xl shadow-inner text-xs sm:text-sm">
-                            <table className="min-w-full divide-y divide-gray-700">
-                                <thead className="bg-gray-800 sticky top-0">
-                                    <tr>
-                                        {["播放時間 (UTC)", "播放平台", "播放時長 (分:秒)", "歌曲名稱", "歌手", "專輯名稱",
-                                            "播放完整度(%)", "開始原因", "結束原因", "隨機播放", "是否跳過", "離線播放", "隱身模式"].map(header => (
-                                                <th key={header} className="px-2 py-2 sm:px-4 sm:py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">
-                                                    {header}
-                                                </th>
-                                            ))}
-                                    </tr>
-                                </thead>
-                                <tbody className="bg-gray-900 divide-y divide-gray-700">
-                                    {filteredRecords.map((record, index) => {
-                                        const ms_played_int = getMsFromRecord(record.ms_played || 0);
-                                        const uri = record.spotify_track_uri;
-                                        let play_completion_percentage = "N/A";
-                                        if (maxPlayTimes && uri && maxPlayTimes[uri] > 0) {
-                                            const percentage = (ms_played_int / maxPlayTimes[uri]) * 100;
-                                            play_completion_percentage = `${percentage.toFixed(1)}%`;
-                                        }
-
-                                        return (
-                                            <tr key={index} className="hover:bg-gray-700 transition-colors duration-150 ease-in-out">
-                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.ts || 'N/A'}</td>
-                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.platform || 'N/A'}</td>
-                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200 text-right">{formatMsToMinSec(ms_played_int)}</td>
-                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.master_metadata_track_name || 'N/A'}</td>
-                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.master_metadata_album_artist_name || 'N/A'}</td>
-                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.master_metadata_album_album_name || 'N/A'}</td>
-                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200 text-center">{play_completion_percentage}</td>
-                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.reason_start || 'N/A'}</td>
-                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.reason_end || 'N/A'}</td>
-                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.shuffle === true ? "是" : (record.shuffle === false ? "否" : "N/A")}</td>
-                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.skipped === true ? "是" : (record.skipped === false ? "否" : "N/A")}</td>
-                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.offline === true ? "是" : (record.offline === false ? "否" : "N/A")}</td>
-                                                <td className="px-2 py-1 sm:px-4 sm:py-2 whitespace-nowrap text-xs sm:text-sm text-gray-200">{record.incognito_mode === true ? "是" : (record.incognito_mode === false ? "否" : "N/A")}</td>
-                                            </tr>
-                                        );
-                                    })}
-                                </tbody>
-                            </table>
                         </div>
+
                         <div className="flex justify-end mt-4 sm:mt-6">
                             <button
                                 onClick={onClose}
