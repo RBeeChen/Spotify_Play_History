@@ -1963,7 +1963,7 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
         );
     };
 
-    const RecapDateSelectModal = ({ isOpen, onClose, onConfirm, initialStartDate, initialEndDate, onApplyAllDataChange, applyAllData }) => {
+    const RecapDateSelectModal = ({ isOpen, onClose, onConfirm, initialStartDate, initialEndDate, onStartDateChange, onEndDateChange, onApplyAllDataChange, applyAllData }) => {
         if (!isOpen) return null;
     
         return (
@@ -1980,7 +1980,7 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
                                 type="text"
                                 className={`flex-grow p-2 sm:p-3 border rounded-lg text-sm sm:text-base ${applyAllData ? 'bg-gray-700 border-gray-600 cursor-not-allowed' : 'bg-gray-100 border-gray-300'} text-gray-900 placeholder-gray-400 focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm`}
                                 value={initialStartDate}
-                                readOnly // Make it readOnly
+                                onChange={(e) => onStartDateChange(e.target.value)}
                                 disabled={applyAllData}
                                 placeholder="20230101"
                             />
@@ -1992,7 +1992,7 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
                                 type="text"
                                 className={`flex-grow p-2 sm:p-3 border rounded-lg text-sm sm:text-base ${applyAllData ? 'bg-gray-700 border-gray-600 cursor-not-allowed' : 'bg-gray-100 border-gray-300'} text-gray-900 placeholder-gray-400 focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm`}
                                 value={initialEndDate}
-                                readOnly // Make it readOnly
+                                onChange={(e) => onEndDateChange(e.target.value)}
                                 disabled={applyAllData}
                                 placeholder="20231231"
                             />
@@ -2084,7 +2084,7 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
                         </li>
                         <li>**✨ 歌曲洞察**：在歌曲的詳細記錄頁面中，點擊此按鈕可讓 Gemini 分析並總結該歌曲的主題、歌詞意義或整體氛圍。</li>
                         <li>**✨ 歌手洞察**：在歌手的詳細資料頁面中，點擊此按鈕可讓 Gemini 概述該歌手的音樂風格、主要影響及對音樂的整體影響。</li>
-                        <li>**✨ 播放回顧 (Recap)**：點擊此按鈕將彈出一個日期選擇框。此時，<strong className="text-red-600">回顧的日期範圍將預設為您在主分析器「依日期篩選？」中設定的日期。您可以選擇「套用全部資料」來生成包含所有歷史數據的回顧，這將不顯示總收聽時長。</strong></li>
+                        <li>**✨ 播放回顧 (Recap)**：點擊此按鈕，將彈出日期選擇框，您可以選擇特定區間或「套用全部資料」來生成一個類似 Spotify Wrapped 的視覺化音樂回顧。</li>
                     </ul>
                 </div>
 
@@ -2342,8 +2342,7 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
                             return;
                         }
                         // Set recap modal initial states before opening
-                        // These will be read-only in the modal
-                        setRecapStartDate(startDate); 
+                        setRecapStartDate(startDate); // Populate with current main analyzer dates
                         setRecapEndDate(endDate);
                         setRecapApplyAllData(false); // Default to not applying all data initially for Recap
                         setIsRecapDateSelectModalOpen(true); // Open the date selection modal
@@ -2760,7 +2759,8 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
                 onConfirm={handleRecapGeneration}
                 initialStartDate={recapStartDate} // Use new recap states
                 initialEndDate={recapEndDate}
-                // Removed onStartDateChange and onEndDateChange as inputs are now readOnly
+                onStartDateChange={setRecapStartDate}
+                onEndDateChange={setRecapEndDate}
                 onApplyAllDataChange={setRecapApplyAllData} // Use new recap states
                 applyAllData={recapApplyAllData} // Use new recap states
             />
