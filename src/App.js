@@ -309,7 +309,7 @@ const App = () => {
     const [isRecapLoading, setIsRecapLoading] = useState(false);
     const [isRecapDateSelectModalOpen, setIsRecapDateSelectModalOpen] = useState(false); // New state for Recap date selection modal
 
-    // YouTube API Key State (Hardcoded)
+    // YouTube API Key (Hardcoded)
     const youtubeApiKey = "AIzaSyCAGNcELz80THkZrLa448pYpl0PzRraSfY";
 
     const getFieldKeyFromName = useCallback((displayName) => {
@@ -990,8 +990,10 @@ const App = () => {
                         const startObj = dateFilterEnabled ? parseDateFromString(startDate) : null;
                         const endObj = dateFilterEnabled ? parseDateFromString(endDate) : null;
 
-                        const start_date_normalized = new Date(startObj.getFullYear(), startObj.getMonth(), startObj.getDate());
-                        const end_date_normalized = new Date(endObj.getFullYear(), endObj.getMonth(), endObj.getDate());
+                        // FIX: Ensure these are null-safe
+                        const start_date_normalized = startObj ? new Date(startObj.getFullYear(), startObj.getMonth(), startObj.getDate()) : null;
+                        const end_date_normalized = endObj ? new Date(endObj.getFullYear(), endObj.getMonth(), endObj.getDate()) : null;
+                        
                         const item_date_normalized = new Date(recordDate.getFullYear(), recordDate.getMonth(), recordDate.getDate());
 
                         if ((!start_date_normalized || item_date_normalized >= start_date_normalized) &&
