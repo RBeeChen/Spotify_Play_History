@@ -712,9 +712,9 @@ const App = () => {
                     errorMessage += `API 錯誤訊息: ${errorDetails}`;
                 } else if (!result.candidates || result.candidates.length === 0) {
                     errorMessage += "API 響應中缺少 'candidates'。";
-                } else if (!result.candidates[0].content || !result.candidates[0].content.parts || result.candidates[0].content.parts.length === 0) {
+                } else if (result.candidates[0] && (!result.candidates[0].content || !result.candidates[0].content.parts || result.candidates[0].content.parts.length === 0)) {
                     errorMessage += "API 響應中缺少預期的內容結構。";
-                } else if (typeof result.candidates[0].content.parts[0].text !== 'string') {
+                } else if (result.candidates[0] && result.candidates[0].content && result.candidates[0].content.parts && typeof result.candidates[0].content.parts[0].text !== 'string') {
                     errorMessage += "API 響應中 'text' 內容格式不正確。";
                 } else {
                     errorMessage += "API 響應的 'text' 內容為空。";
@@ -1711,8 +1711,8 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
                         </div>
 
                         {/* YouTube MV and Details Table - Side-by-side on larger screens */}
-                        {/* Removed overflow-hidden from this container to prevent cropping of iframe content */}
-                        <div className="flex flex-col md:flex-row flex-grow gap-4 sm:gap-6 mb-4">
+                        {/* Ensure this flex-grow container has min-h-0 and no overflow-hidden here */}
+                        <div className="flex flex-col md:flex-row flex-grow gap-4 sm:gap-6 mb-4 min-h-0">
                             {/* YouTube MV Section */}
                             <div className="w-full md:w-1/2 flex flex-col">
                                 {youtubeLoading ? (
@@ -1723,7 +1723,8 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
                                 ) : youtubeVideoId ? (
                                     <div className="flex flex-col items-center my-4">
                                         <h3 className="text-xl font-semibold mb-3 text-gray-200">YouTube MV</h3>
-                                        <div className="relative w-full overflow-hidden rounded-xl" style={{ paddingTop: '56.25%' /* 16:9 Aspect Ratio */ }}>
+                                        {/* Removed overflow-hidden from this parent div and ensured iframe fills its container */}
+                                        <div className="relative w-full rounded-xl" style={{ paddingTop: '56.25%' /* 16:9 Aspect Ratio */ }}>
                                             <iframe
                                                 className="absolute top-0 left-0 w-full h-full"
                                                 src={`https://www.youtube.com/embed/${youtubeVideoId}`}
@@ -1744,6 +1745,7 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
                             </div>
 
                             {/* Detailed Records Table Section */}
+                            {/* This div should still be flex-grow and overflow-auto */}
                             <div className="w-full md:w-1/2 flex-grow overflow-auto border border-gray-600 rounded-xl shadow-inner text-xs sm:text-sm">
                                 <h3 className="text-xl font-semibold mb-3 text-gray-200 p-2 sticky top-0 bg-gray-800 z-10 rounded-t-xl">詳細記錄</h3>
                                 <table className="min-w-full divide-y divide-gray-700">
