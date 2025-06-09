@@ -665,7 +665,7 @@ const App = () => {
 
             // Canvas will automatically provide the API key at runtime if left as an empty string.
             // DO NOT ADD any API key validation.
-            const apiKey = ""; 
+            const apiKey = "AIzaSyB4Wwf3gkNsySR6jugfRqiMEK5pt5JDXqs"; 
             const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
             const response = await fetch(apiUrl, {
                 method: 'POST',
