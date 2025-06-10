@@ -25,14 +25,15 @@ const parseDateFromString = (date_str) => {
     if (!date_str) {
         return null;
     }
+    // Expected format YYYYMMDD
+    if (!/^\d{8}$/.test(date_str)) {
+        console.warn(`日期格式錯誤: '${date_str}'。應為YYYYMMDD。`);
+        return null;
+    }
     const year = parseInt(date_str.substring(0, 4), 10);
     const month = parseInt(date_str.substring(4, 6), 10) - 1; // Month is 0-indexed in Date
     const day = parseInt(date_str.substring(6, 8), 10);
 
-    if (isNaN(year) || isNaN(month) || isNaN(day)) {
-        console.warn(`日期格式錯誤: '${date_str}'。應為YYYYMMDD。`);
-        return null;
-    }
     const dateObj = new Date(year, month, day);
     // Validate if the date components actually form the date they represent
     if (dateObj.getFullYear() !== year || dateObj.getMonth() !== month || dateObj.getDate() !== day) {
@@ -41,6 +42,7 @@ const parseDateFromString = (date_str) => {
     }
     return dateObj;
 };
+
 
 const filterDataByDate = (data_list, start_date_obj, end_date_obj) => {
     if (!start_date_obj || !end_date_obj) {
@@ -53,7 +55,7 @@ const filterDataByDate = (data_list, start_date_obj, end_date_obj) => {
             continue;
         }
         try {
-            const item_date_str = item.ts.substring(0, 10); // ExtractYYYY-MM-DD
+            const item_date_str = item.ts.substring(0, 10); // Extract YYYY-MM-DD
             const item_date = new Date(item_date_str); // Create Date object
 
             // Normalize dates to start of day for comparison
@@ -253,7 +255,7 @@ const TREND_ANALYSIS_TYPES = {
 };
 
 const App = () => {
-    const [currentPage, setCurrentPage] = useState('analyzer'); // 'analyzer', 'how-to-use' or 'recap'
+    const [currentPage, setCurrentPage] = useState('analyzer'); // 'analyzer', 'how-to-use', 'recap', 'recommendation'
 
     const [filePaths, setFilePaths] = useState([]);
     const [allStreamingDataOriginal, setAllStreamingDataOriginal] = useState([]);
@@ -304,14 +306,15 @@ const App = () => {
 
     // New state for recommendation choice modal
     const [isRecommendationChoiceModalOpen, setIsRecommendationChoiceModalOpen] = useState(false);
+    // New state for recommendation data
+    const [recommendationData, setRecommendationData] = useState(null);
 
     // Recap States (獨立於主分析器)
     const [recapData, setRecapData] = useState(null);
     const [isRecapLoading, setIsRecapLoading] = useState(false);
     const [isRecapDateSelectModalOpen, setIsRecapDateSelectModalOpen] = useState(false);
-    const [recapStartDate, setRecapStartDate] = useState("");
-    const [recapEndDate, setRecapEndDate] = useState("");
-    const [recapApplyAllData, setRecapApplyAllData] = useState(false); // New state for "apply all data" in Recap
+    // recapApplyAllData is still in App.js as it controls the high-level recap logic
+    const [recapApplyAllData, setRecapApplyAllData] = useState(false); 
 
 
     // YouTube API Key (Hardcoded)
@@ -338,6 +341,7 @@ const App = () => {
         setCurrentlyDisplayedRankedItems([]);
         setProgress(0);
         setRecapData(null); // Clear recap data on new file selection
+        setRecommendationData(null); // Clear recommendation data on new file selection
     };
 
     const loadAndCombineData = useCallback(async (files) => {
@@ -512,9 +516,9 @@ const App = () => {
         setTrendAnalysisType("無");
         setMainSearchTerm("");
         setRecapData(null); // Clear recap data on reset
-        setRecapStartDate(""); // Also reset recap states
-        setRecapEndDate("");
+        // The recapModalStartDate and recapModalEndDate are now local to RecapDateSelectModal, no need to reset here
         setRecapApplyAllData(false);
+        setRecommendationData(null); // Clear recommendation data on reset
         // Reset search widgets state based on default ranking field
         setMainSearchEnabled(true); // Assuming '歌曲名稱 - 歌手' is default and supports search
         alert("應用程式狀態已重設。");
@@ -645,7 +649,7 @@ const App = () => {
     }, [youtubeApiKey]);
 
 
-    const callGeminiAPI = useCallback(async (prompt, title, isStructured = false, schema = null) => {
+    const callGeminiAPI = useCallback(async (prompt, title, isStructured = false, schema = null, targetPageState = null) => {
         setIsGeminiLoading(true);
         setGeminiModalTitle(title);
         setGeminiModalContent("正在生成內容，請稍候...");
@@ -665,7 +669,7 @@ const App = () => {
 
             // Canvas will automatically provide the API key at runtime if left as an empty string.
             // DO NOT ADD any API key validation.
-            const apiKey = "AIzaSyB4Wwf3gkNsySR6jugfRqiMEK5pt5JDXqs"; 
+            const apiKey = ""; 
             const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
             const response = await fetch(apiUrl, {
                 method: 'POST',
@@ -691,12 +695,17 @@ const App = () => {
                 if (isStructured) {
                     try {
                         const parsedJson = JSON.parse(extractedText);
-                        // Store the parsed JSON if it's recap data
-                        if (title === "您的音樂回顧 (Recap)") {
+                        // Store the parsed JSON based on title/targetPageState
+                        if (targetPageState === 'recap') {
                             setRecapData(parsedJson);
                             setIsGeminiModalOpen(false); // Close generic modal if recap data loaded
                             setCurrentPage('recap'); // Switch to recap page
                             return; // Exit as we're handling recap data specifically
+                        } else if (targetPageState === 'recommendation') {
+                            setRecommendationData(parsedJson);
+                            setIsGeminiModalOpen(false); // Close generic modal if recommendation data loaded
+                            setCurrentPage('recommendation'); // Switch to recommendation page
+                            return; // Exit as we're handling recommendation data specifically
                         }
                         textToDisplay = JSON.stringify(parsedJson, null, 2); // Pretty print for other structured responses
                     } catch (parseError) {
@@ -710,7 +719,10 @@ const App = () => {
                 let errorMessage = "無法生成內容。";
                 if (errorDetails) {
                     errorMessage += `API 錯誤訊息: ${errorDetails}`;
-                } else if (!result.candidates || result.candidates.length === 0) {
+                } else if (result.candidates && result.candidates[0] && result.candidates[0].finishReason === "SAFETY") {
+                    errorMessage = "內容因安全政策而被阻擋。請嘗試不同的提示。";
+                }
+                else if (!result.candidates || result.candidates.length === 0) {
                     errorMessage += "API 響應中缺少 'candidates'。";
                 } else if (result.candidates[0] && (!result.candidates[0].content || !result.candidates[0].content.parts || result.candidates[0].content.parts.length === 0)) {
                     errorMessage += "API 響應中缺少預期的內容結構。";
@@ -856,13 +868,17 @@ const App = () => {
     const handlePlaylistRecommendation = useCallback(async (type) => {
         setIsRecommendationChoiceModalOpen(false); // Close the choice modal
 
-        if (rankingField !== FIELD_MAPPING[1][1] || !allStreamingDataOriginal.length) {
-            alert("此功能僅在『排行項目』為『歌曲名稱 - 歌手』時可用，且需有載入的播放記錄。");
+        if (allStreamingDataOriginal.length === 0) {
+            alert("請先載入您的 Spotify 播放記錄檔案才能生成推薦歌單。");
+            return;
+        }
+        if (rankingField !== FIELD_MAPPING[1][1]) {
+            alert("此功能僅在『排行項目』為『歌曲名稱 - 歌手』時可用。");
             return;
         }
 
         let playlistPrompt = "根據以下用戶的 Spotify 聽歌數據，請為我推薦 30 首新的歌曲。請提供歌曲標題和藝術家。\n";
-        playlistPrompt += "請使用以下格式輸出：\nGemini 智慧推薦歌曲系統\n1. 歌曲標題 - 藝術家\n2. 歌曲標題 - 藝術家\n...\n\n";
+        
         playlistPrompt += "我的收聽數據摘要：\n";
 
         // 提取前10首歌曲的詳細信息
@@ -908,14 +924,43 @@ const App = () => {
         }
 
         if (type === 'unheard') {
-            // Simplified prompt for unheard songs
-            playlistPrompt += `\n請避免推薦用戶已經非常熟悉的熱門歌曲 (基於其播放記錄的前300名最常播放歌曲的風格)。\n`;
-            playlistPrompt += "\n請推薦與上述音樂風格相似或基於這些資訊衍生的新歌。請確保推薦的歌曲是全新的聆聽體驗。";
+            playlistPrompt += `\n請避免推薦用戶已經非常熟悉的熱門歌曲 (基於其播放記錄的前300名最常播放歌曲的風格)。請推薦與上述音樂風格相似或基於這些資訊衍生的新歌。請確保推薦的歌曲是全新的聆聽體驗。`;
         } else { // type === 'random'
             playlistPrompt += "\n請推薦與上述音樂風格相似或基於這些資訊衍生的新歌。";
         }
 
-        callGeminiAPI(playlistPrompt, "Gemini 推薦歌單");
+        playlistPrompt += `\n\n請以繁體中文回應，並遵循以下 JSON 格式。請確保只輸出 JSON，不要有額外的文字或解釋。推薦的歌曲數量請為 30 首。
+{
+  "playlistTitle": "[推薦歌單的標題，例如：根據您的喜好推薦的歌單]",
+  "recommendations": [
+    { "song": "歌曲名稱1", "artist": "藝術家1" },
+    { "song": "歌曲名稱2", "artist": "藝術家2" },
+    // ... 更多歌曲
+  ],
+  "description": "[一段簡短的推薦說明，例如：根據您的收聽習慣和偏好，為您精選了這些新歌。]"
+}`;
+
+        const recommendationSchema = {
+            type: "OBJECT",
+            properties: {
+                playlistTitle: { "type": "STRING" },
+                recommendations: {
+                    "type": "ARRAY",
+                    "items": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "song": { "type": "STRING" },
+                            "artist": { "type": "STRING" }
+                        },
+                        "propertyOrdering": ["song", "artist"]
+                    }
+                },
+                "description": { "type": "STRING" }
+            },
+            "propertyOrdering": ["playlistTitle", "recommendations", "description"]
+        };
+
+        await callGeminiAPI(playlistPrompt, "Gemini 推薦歌單", true, recommendationSchema, 'recommendation');
     }, [rankingField, allStreamingDataOriginal, currentlyDisplayedRankedItems, callGeminiAPI]);
 
 
@@ -1015,7 +1060,7 @@ const App = () => {
                 const recordDateStr = record.ts;
                 if (recordDateStr) {
                     try {
-                        const recordDate = new Date(recordDateStr.substring(0, 10)); //YYYY-MM-DD
+                        const recordDate = new Date(recordDateStr.substring(0, 10)); // YYYY-MM-DD
                         
                         let shouldAddRecord = true;
                         if (dateFilterEnabled) { // Use main analyzer's date filter states
@@ -1346,7 +1391,7 @@ const App = () => {
     }, [rankingField, trendAnalysisType, getFieldKeyFromName]);
 
     // Recap Functionality - now triggered by RecapDateSelectModal
-    const handleRecapGeneration = useCallback(async () => {
+    const handleRecapGeneration = useCallback(async (selectedStartDate, selectedEndDate) => { // Receive dates as arguments
         setIsRecapDateSelectModalOpen(false); // Close the date selection modal
         
         if (allStreamingDataOriginal.length === 0) {
@@ -1362,14 +1407,20 @@ const App = () => {
 
         // Apply date filter if not 'applyAllDataFlag'
         if (!recapApplyAllData) { // Use recap's independent state
-            const currentStartDateObj = parseDateFromString(recapStartDate); // Use recap's independent state
-            const currentEndDateObj = parseDateFromString(recapEndDate); // Use recap's independent state
+            const currentStartDateObj = parseDateFromString(selectedStartDate); 
+            const currentEndDateObj = parseDateFromString(selectedEndDate); 
 
-            if (!currentStartDateObj || !currentEndDateObj || currentStartDateObj > currentEndDateObj) {
-                alert("請確保開始日期和結束日期格式正確且順序合理。");
+            if (!currentStartDateObj || !currentEndDateObj) {
+                alert("請確保開始日期和結束日期格式正確 (YYYYMMDD)。");
                 setIsRecapLoading(false);
                 return;
             }
+            if (currentStartDateObj > currentEndDateObj) {
+                alert("回顧的開始日期不能晚於結束日期。");
+                setIsRecapLoading(false);
+                return;
+            }
+
             dataToAnalyze = filterDataByDate(allStreamingDataOriginal, currentStartDateObj, currentEndDateObj);
             if (dataToAnalyze.length === 0) {
                 alert("在指定的日期範圍內沒有找到播放記錄，無法生成回顧。");
@@ -1546,14 +1597,14 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
                     properties: {
                         title: { type: "STRING" },
                         artists: {
-                            type: "ARRAY",
-                            items: {
-                                type: "OBJECT",
-                                properties: {
-                                    rank: { type: "NUMBER" },
-                                    artist: { type: "STRING" }
+                            "type": "ARRAY",
+                            "items": {
+                                "type": "OBJECT",
+                                "properties": {
+                                    "rank": { "type": "NUMBER" },
+                                    "artist": { "type": "STRING" }
                                 },
-                                propertyOrdering: ["rank", "artist"]
+                                "propertyOrdering": ["rank", "artist"]
                             }
                         }
                     },
@@ -1590,9 +1641,9 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
             ]
         };
 
-        await callGeminiAPI(prompt, "您的音樂回顧 (Recap)", true, schema);
+        await callGeminiAPI(prompt, "您的音樂回顧 (Recap)", true, schema, 'recap');
         setIsRecapLoading(false); // Set loading to false after API call
-    }, [allStreamingDataOriginal, callGeminiAPI, recapApplyAllData, recapStartDate, recapEndDate]);
+    }, [allStreamingDataOriginal, callGeminiAPI, recapApplyAllData]);
 
 
     // Detail Modal Component
@@ -1963,12 +2014,33 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
         );
     };
 
-    const RecapDateSelectModal = ({ isOpen, onClose, onConfirm, initialStartDate, initialEndDate, onStartDateChange, onEndDateChange, onApplyAllDataChange, applyAllData }) => {
-        if (!isOpen) return null;
+    // Corrected RecapDateSelectModal: State for dates is now local to this component.
+    const RecapDateSelectModal = ({ isOpen, onClose, onConfirm, onApplyAllDataChange, applyAllData }) => {
+        // Local state for the input fields
+        const [localStartDate, setLocalStartDate] = useState("");
+        const [localEndDate, setLocalEndDate] = useState("");
+    
+        // Effect to reset local dates when modal opens/closes, or applyAllData changes
+        useEffect(() => {
+            if (!isOpen) { // Reset when closing
+                setLocalStartDate("");
+                setLocalEndDate("");
+            }
+        }, [isOpen]);
+    
+        // When 'Apply all data' is toggled, clear local dates
+        useEffect(() => {
+            if (applyAllData) {
+                setLocalStartDate("");
+                setLocalEndDate("");
+            }
+        }, [applyAllData]);
+    
+        if (!isOpen) return null; // Only render if isOpen is true
     
         return (
-            <div className="fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center p-4 z-50">
-                <div className="bg-gradient-to-br from-indigo-800 to-blue-900 text-white rounded-xl sm:rounded-3xl shadow-2xl p-4 sm:p-8 w-full max-w-full sm:max-w-md flex flex-col items-center">
+            <div className="fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center p-4 z-50 transition-opacity duration-300 opacity-100 visible">
+                <div className="bg-gradient-to-br from-indigo-800 to-blue-900 text-white rounded-xl sm:rounded-3xl shadow-2xl p-4 sm:p-8 w-full max-w-full sm:max-w-md flex flex-col items-center transform scale-100 opacity-100">
                     <h2 className="text-xl sm:text-2xl font-bold mb-4 sm:mb-6 text-center">選擇回顧日期範圍</h2>
                     <p className="text-base sm:text-lg text-center mb-6 sm:mb-8">請選擇您希望回顧的日期區間，或選擇分析所有資料。</p>
                     
@@ -1979,8 +2051,8 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
                                 id="recapStartDate"
                                 type="text"
                                 className={`flex-grow p-2 sm:p-3 border rounded-lg text-sm sm:text-base ${applyAllData ? 'bg-gray-700 border-gray-600 cursor-not-allowed' : 'bg-gray-100 border-gray-300'} text-gray-900 placeholder-gray-400 focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm`}
-                                value={initialStartDate}
-                                onChange={(e) => onStartDateChange(e.target.value)}
+                                value={localStartDate}
+                                onChange={(e) => setLocalStartDate(e.target.value)}
                                 disabled={applyAllData}
                                 placeholder="20230101"
                             />
@@ -1991,8 +2063,8 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
                                 id="recapEndDate"
                                 type="text"
                                 className={`flex-grow p-2 sm:p-3 border rounded-lg text-sm sm:text-base ${applyAllData ? 'bg-gray-700 border-gray-600 cursor-not-allowed' : 'bg-gray-100 border-gray-300'} text-gray-900 placeholder-gray-400 focus:ring-blue-500 focus:border-blue-500 transition duration-200 shadow-sm`}
-                                value={initialEndDate}
-                                onChange={(e) => onEndDateChange(e.target.value)}
+                                value={localEndDate}
+                                onChange={(e) => setLocalEndDate(e.target.value)}
                                 disabled={applyAllData}
                                 placeholder="20231231"
                             />
@@ -2011,7 +2083,7 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
     
                     <div className="flex space-x-4">
                         <button
-                            onClick={onConfirm} // Call onConfirm directly which will use the recap states from the parent.
+                            onClick={() => onConfirm(localStartDate, localEndDate)} // Pass local state back
                             className="px-6 py-3 sm:px-8 sm:py-4 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-xl shadow-lg hover:from-green-600 hover:to-emerald-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition transform hover:scale-105 active:scale-95 text-base sm:text-lg"
                         >
                             確認
@@ -2076,15 +2148,10 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
                     <p>本工具整合了 Gemini AI 功能，為您提供更深入的音樂洞察和智慧推薦：</p>
                     <ul className="list-disc list-inside pl-4 space-y-1 sm:space-y-2">
                         <li>**✨ 分析結果洞察**：點擊此按鈕，Gemini AI 將對您當前的排行結果（主要基於歌曲和播放習慣）進行綜合分析，提供關於您的**收聽習慣和可能的曲風偏好**的洞察。</li>
-                        <li>**✨ Gemini 推薦歌單**：當您在「排行項目」中選擇「歌曲名稱 - 歌手」時，此按鈕將可用。點擊它，您將可以選擇：
-                            <ul className="list-circle list-inside pl-4 space-y-1 mt-2">
-                                <li>**隨機推薦**：Gemini 將根據您的整體收聽數據，為您推薦 30 首新的歌曲。</li>
-                                <li>**隨機但沒有聽過的歌**：Gemini 會在推薦時，智慧地排除您過去**最常播放的前 300 首歌曲**，以確保為您推薦的歌曲對您來說是全新的聆聽體驗。</li>
-                            </ul>
-                        </li>
+                        <li>**✨ Gemini 推薦歌單**：當您在「排行項目」中選擇「歌曲名稱 - 歌手」時，此按鈕將可用。點擊它，您將可以選擇推薦類型。確認後，Gemini 會根據您的收聽數據（熱門歌曲、歌手、最近播放等）生成一個精選歌單，並在新頁面中以精美排版呈現。</li>
                         <li>**✨ 歌曲洞察**：在歌曲的詳細記錄頁面中，點擊此按鈕可讓 Gemini 分析並總結該歌曲的主題、歌詞意義或整體氛圍。</li>
                         <li>**✨ 歌手洞察**：在歌手的詳細資料頁面中，點擊此按鈕可讓 Gemini 概述該歌手的音樂風格、主要影響及對音樂的整體影響。</li>
-                        <li>**✨ 播放回顧 (Recap)**：點擊此按鈕，將彈出日期選擇框，您可以選擇特定區間或「套用全部資料」來生成一個類似 Spotify Wrapped 的視覺化音樂回顧。</li>
+                        <li>**✨ 播放回顧 (Recap)**：點擊此按鈕將彈出一個日期選擇框。您可以選擇回顧的日期範圍，或選擇分析所有資料。確認後，Gemini 將為您生成個人化的音樂回顧，並在新頁面中以精美排版呈現。</li>
                     </ul>
                 </div>
 
@@ -2231,6 +2298,67 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
         );
     };
 
+    const RecommendationPage = ({ data, isLoading, onBack }) => {
+        if (isLoading) {
+            return (
+                <div className="flex flex-col items-center justify-center min-h-[500px] bg-gradient-to-br from-gray-900 to-black text-white rounded-3xl shadow-xl p-8">
+                    <div className="animate-spin rounded-full h-20 w-20 border-t-4 border-b-4 border-purple-500"></div>
+                    <p className="mt-6 text-xl font-semibold">正在生成您的推薦歌單，請稍候...</p>
+                    <p className="mt-2 text-md text-gray-400">這可能需要一些時間</p>
+                </div>
+            );
+        }
+
+        if (!data || !data.recommendations || data.recommendations.length === 0) {
+            return (
+                <div className="flex flex-col items-center justify-center min-h-[500px] bg-gradient-to-br from-gray-900 to-black text-white rounded-3xl shadow-xl p-8">
+                    <p className="text-xl font-semibold">目前沒有推薦歌單數據可顯示。請嘗試重新生成。</p>
+                    <button
+                        onClick={onBack}
+                        className="mt-8 px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-700 text-white font-semibold rounded-2xl shadow-xl hover:from-indigo-700 hover:to-purple-800 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95"
+                    >
+                        返回主分析器
+                    </button>
+                </div>
+            );
+        }
+
+        return (
+            <div className="bg-gradient-to-br from-gray-900 to-black text-white p-4 sm:p-6 rounded-3xl shadow-xl w-full mx-auto max-w-full lg:max-w-7xl min-h-[calc(100vh-100px)] flex flex-col">
+                <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold text-center mb-6 sm:mb-10 drop-shadow-xl text-gradient-to-r from-green-400 via-teal-400 to-cyan-400">
+                    {data.playlistTitle || "推薦歌單"}
+                </h1>
+                <p className="text-lg md:text-xl text-center mb-8 opacity-80 leading-relaxed">{data.description || "根據您的收聽習慣，為您精選。"}</p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 flex-grow">
+                    {data.recommendations.map((item, index) => (
+                        <div key={index} className="bg-gradient-to-br from-gray-800 to-gray-700 rounded-xl p-4 shadow-lg hover:shadow-xl transition-all duration-300 ease-in-out transform hover:scale-105 flex flex-col justify-between">
+                            <h3 className="text-lg sm:text-xl font-semibold mb-2 text-cyan-300 truncate">{item.song || "未知歌曲"}</h3>
+                            <p className="text-sm sm:text-base text-gray-300 truncate mb-3">{item.artist || "未知藝術家"}</p>
+                            <div className="flex justify-end mt-auto">
+                                <button
+                                    onClick={() => openExternalLink(`https://www.youtube.com/results?search_query=${encodeURIComponent(item.song + ' ' + item.artist + ' official audio')}`)}
+                                    className="text-xs px-3 py-1 bg-gradient-to-r from-red-600 to-rose-700 text-white rounded-full shadow-md hover:from-red-700 hover:to-rose-800 transition transform hover:scale-110 active:scale-95"
+                                >
+                                    在 YouTube 上搜尋
+                                </button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+
+                <div className="flex justify-center mt-8 sm:mt-12">
+                    <button
+                        onClick={onBack}
+                        className="px-6 py-3 sm:px-8 sm:py-4 bg-gradient-to-r from-indigo-600 to-purple-700 text-white font-semibold rounded-2xl shadow-xl hover:from-indigo-700 hover:to-purple-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95"
+                    >
+                        返回主分析器
+                    </button>
+                </div>
+            </div>
+        );
+    };
+
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-gray-200 to-gray-300 p-4 sm:p-6 font-inter text-gray-800">
@@ -2337,15 +2465,13 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
                 </button>
                  <button
                     onClick={() => {
+                        // Recap is now independent, just check if files are loaded
                         if (allStreamingDataOriginal.length === 0) {
                             alert("請先載入您的 Spotify 播放記錄檔案才能生成回顧。");
                             return;
                         }
-                        // Set recap modal initial states before opening
-                        setRecapStartDate(startDate); // Populate with current main analyzer dates
-                        setRecapEndDate(endDate);
-                        setRecapApplyAllData(false); // Default to not applying all data initially for Recap
-                        setIsRecapDateSelectModalOpen(true); // Open the date selection modal
+                        // Open the date selection modal for recap
+                        setIsRecapDateSelectModalOpen(true); 
                     }}
                     className={`px-5 py-2 sm:px-6 sm:py-3 rounded-xl shadow-lg font-semibold transition transform hover:scale-105 active:scale-95 text-sm sm:text-base ${currentPage === 'recap' ? 'bg-gradient-to-r from-blue-600 to-indigo-700 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
                     disabled={allStreamingDataOriginal.length === 0}
@@ -2585,9 +2711,15 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
                         </button>
                         {rankingField === FIELD_MAPPING[1][1] && (
                             <button
-                                onClick={() => setIsRecommendationChoiceModalOpen(true)} // Open the choice modal
+                                onClick={() => {
+                                    if (allStreamingDataOriginal.length === 0) {
+                                        alert("請先載入您的 Spotify 播放記錄檔案才能生成推薦歌單。");
+                                        return;
+                                    }
+                                    setIsRecommendationChoiceModalOpen(true); // Open the choice modal
+                                }}
                                 className="px-6 py-3 sm:px-8 sm:py-4 bg-gradient-to-r from-pink-600 to-red-700 text-white font-semibold rounded-2xl shadow-xl hover:from-pink-700 hover:to-red-800 focus:outline-none focus:ring-2 focus:ring-pink-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 active:scale-95 text-base sm:text-lg"
-                                disabled={currentlyDisplayedRankedItems.length === 0}
+                                disabled={allStreamingDataOriginal.length === 0} // Only needs file loaded now
                             >
                                 ✨ Gemini 推薦歌單
                             </button>
@@ -2752,17 +2884,18 @@ ${sortedArtists.map(a => `- ${a.name} (${a.count} 次)`).join('\n')}
                 <RecapPage data={recapData} isLoading={isRecapLoading} onBack={() => setCurrentPage('analyzer')} />
             )}
 
+            {currentPage === 'recommendation' && (
+                <RecommendationPage data={recommendationData} isLoading={isGeminiLoading} onBack={() => setCurrentPage('analyzer')} />
+            )}
+
+
             {/* Recap Date Select Modal */}
             <RecapDateSelectModal
                 isOpen={isRecapDateSelectModalOpen}
                 onClose={() => setIsRecapDateSelectModalOpen(false)}
-                onConfirm={handleRecapGeneration}
-                initialStartDate={recapStartDate} // Use new recap states
-                initialEndDate={recapEndDate}
-                onStartDateChange={setRecapStartDate}
-                onEndDateChange={setRecapEndDate}
-                onApplyAllDataChange={setRecapApplyAllData} // Use new recap states
-                applyAllData={recapApplyAllData} // Use new recap states
+                onConfirm={handleRecapGeneration} // This will now receive localStartDate and localEndDate
+                onApplyAllDataChange={setRecapApplyAllData}
+                applyAllData={recapApplyAllData}
             />
 
             <DetailModal
